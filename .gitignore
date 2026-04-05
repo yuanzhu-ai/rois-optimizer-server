@@ -44,7 +44,7 @@ pytest_cache/
 /websocket
 .agents/
 .claude/
-CLAUDE.md
+# CLAUDE.md  # 项目主文档，需要提交
 /skills-lock.json
 
 # Workspace and runtime directories
