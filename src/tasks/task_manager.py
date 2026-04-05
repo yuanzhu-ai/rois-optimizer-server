@@ -11,6 +11,12 @@ from src.config.config import config_manager
 from src.tasks.redis_manager import redis_manager
 from src.utils.http_client import create_live_server_client
 from src.utils.rule_request_builder import RuleRequestBuilder
+from src.files.file_manager import file_manager
+from src.exceptions import (
+    OptimizerNotFoundError, OptimizerExecutionError,
+    TaskNotFoundError, TaskLimitError, TaskStateError,
+    InputFetchError, OutputSubmitError,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -24,7 +30,7 @@ class TaskStatus(Enum):
 
 
 class Task:
-    def __init__(self, task_id: str, airline: str, optimizer_type: str, parameters: dict = None, 
+    def __init__(self, task_id: str, airline: str, optimizer_type: str, parameters: dict = None,
                  url: str = None, token: str = None, user: str = None):
         self.task_id = task_id
         self.airline = airline
@@ -43,10 +49,12 @@ class Task:
         self.server_id = redis_manager.get_server_id()
         self.input_file_path = None
         self.output_file_path = None
-        
+        self._stdout_lines: List[str] = []
+        self._stderr_lines: List[str] = []
+
         # 初始化时保存到Redis
         self._save_to_redis()
-    
+
     def _save_to_redis(self):
         """保存任务数据到Redis"""
         task_data = {
@@ -62,44 +70,48 @@ class Task:
             'server_id': self.server_id
         }
         redis_manager.set_task(self.task_id, task_data)
-    
+
     def _fetch_input_data(self) -> bool:
-        """从Live Server获取input.gz文件"""
+        """从Live Server获取input.gz文件
+
+        Returns:
+            True: 成功获取input.gz
+            False: server_integration未启用，不需要获取
+
+        Raises:
+            InputFetchError: 获取input.gz失败
+        """
+        optimizer_config = config_manager.get_optimizer_config(self.airline, self.optimizer_type)
+
+        if not hasattr(optimizer_config, 'server_integration') or not optimizer_config.server_integration:
+            logger.info("[Task %s] server_integration未启用，跳过获取input.gz", self.task_id)
+            return False
+
+        # 获取输入URL路径
+        if self.optimizer_type == "Rule":
+            category = self.parameters.get("category")
+            if not category:
+                raise InputFetchError(f"[Task {self.task_id}] Rule类型缺少category参数")
+            if category not in optimizer_config.categories:
+                raise InputFetchError(f"[Task {self.task_id}] Rule category '{category}' 不存在")
+            category_config = optimizer_config.categories[category]
+            input_url = category_config.url.input
+        else:
+            input_url = optimizer_config.url.input
+
+        base_url = self.url if self.url else f"http://localhost/{self.airline.lower()}"
+        token = self.token if self.token else ""
+
+        logger.info("[Task %s] 正在从Live Server获取input.gz, URL: %s, API: %s",
+                     self.task_id, base_url, input_url)
+
         try:
-            optimizer_config = config_manager.get_optimizer_config(self.airline, self.optimizer_type)
-            
-            if not hasattr(optimizer_config, 'server_integration') or not optimizer_config.server_integration:
-                logger.info("[Task %s] server_integration未启用，跳过获取input.gz", self.task_id)
-                return False
-            
-            # 获取输入URL路径
-            if self.optimizer_type == "Rule":
-                category = self.parameters.get("category")
-                if not category:
-                    self.error_message = "Rule类型缺少category参数"
-                    return False
-                if category not in optimizer_config.categories:
-                    self.error_message = f"Rule category '{category}' 不存在"
-                    return False
-                category_config = optimizer_config.categories[category]
-                input_url = category_config.url.input
-            else:
-                input_url = optimizer_config.url.input
-            
-            base_url = self.url if self.url else f"http://localhost/{self.airline.lower()}"
-            token = self.token if self.token else ""
-            
-            logger.info("[Task %s] 正在从Live Server获取input.gz, URL: %s, API: %s", 
-                       self.task_id, base_url, input_url)
-            
-            # 使用with语句确保HTTP连接正确关闭
             with create_live_server_client(base_url, token) as client:
-                # 准备请求数据 - 使用RuleRequestBuilder统一构建
+                # 准备请求数据
                 if self.optimizer_type == "Rule":
                     category = self.parameters.get("category")
                     request_data = RuleRequestBuilder.build_request(category, self.parameters)
                 else:
-                    # PO/RO/TO类型：发送纯整数scenarioId
                     scenario_id = self.parameters.get("scenarioId")
                     if scenario_id:
                         try:
@@ -108,51 +120,154 @@ class Task:
                             request_data = scenario_id
                     else:
                         request_data = None
-                
+
                 logger.debug("[Task %s] 请求数据: %s", self.task_id, request_data)
-                
+
                 response_data = client.get_input_data(
                     airline=self.airline,
                     url_path=input_url,
                     data=request_data
                 )
-            
-            # 保存input.gz文件
-            self.input_file_path = os.path.join(self.working_dir, "input.gz")
-            with open(self.input_file_path, 'wb') as f:
-                f.write(response_data)
-            
-            file_size = len(response_data)
-            logger.info("[Task %s] 成功获取input.gz，大小: %d bytes", self.task_id, file_size)
-            return True
-            
         except Exception as e:
-            self.error_message = f"获取input.gz失败: {str(e)}"
-            logger.error("[Task %s] %s", self.task_id, self.error_message, exc_info=True)
+            raise InputFetchError(f"[Task {self.task_id}] 获取input.gz失败: {e}") from e
+
+        # 保存input.gz文件
+        self.input_file_path = os.path.join(self.working_dir, "input.gz")
+        with open(self.input_file_path, 'wb') as f:
+            f.write(response_data)
+
+        file_size = len(response_data)
+        logger.info("[Task %s] 成功获取input.gz，大小: %d bytes", self.task_id, file_size)
+        return True
+
+    def _submit_output_data(self) -> bool:
+        """向Live Server提交output.gz文件
+
+        Returns:
+            True: 成功提交
+            False: server_integration未启用，不需要提交
+
+        Raises:
+            OutputSubmitError: 提交output.gz失败
+        """
+        optimizer_config = config_manager.get_optimizer_config(self.airline, self.optimizer_type)
+
+        if not hasattr(optimizer_config, 'server_integration') or not optimizer_config.server_integration:
+            logger.info("[Task %s] server_integration未启用，跳过提交output.gz", self.task_id)
             return False
-    
+
+        # 查找输出文件
+        self.output_file_path = os.path.join(self.working_dir, "output.gz")
+        if not os.path.exists(self.output_file_path):
+            raise OutputSubmitError(f"[Task {self.task_id}] 输出文件不存在: {self.output_file_path}")
+
+        # 获取输出URL路径
+        if self.optimizer_type == "Rule":
+            category = self.parameters.get("category")
+            category_config = optimizer_config.categories[category]
+            output_url = category_config.url.output
+        else:
+            output_url = optimizer_config.url.output
+
+        base_url = self.url if self.url else f"http://localhost/{self.airline.lower()}"
+        token = self.token if self.token else ""
+
+        logger.info("[Task %s] 正在向Live Server提交output.gz, URL: %s, API: %s",
+                     self.task_id, base_url, output_url)
+
+        try:
+            with open(self.output_file_path, 'rb') as f:
+                output_data = f.read()
+
+            with create_live_server_client(base_url, token) as client:
+                client.submit_output_data(
+                    airline=self.airline,
+                    url_path=output_url,
+                    data=output_data
+                )
+        except Exception as e:
+            raise OutputSubmitError(f"[Task {self.task_id}] 提交output.gz失败: {e}") from e
+
+        file_size = len(output_data)
+        logger.info("[Task %s] 成功提交output.gz，大小: %d bytes", self.task_id, file_size)
+        return True
+
+    def _build_command(self, optimizer) -> List[str]:
+        """构建优化器执行命令
+
+        Returns:
+            命令参数列表
+
+        Raises:
+            OptimizerExecutionError: 可执行文件不存在
+        """
+        # 通过策略模式统一获取可执行文件路径（Rule/PO/RO/TO 均由各自的 Optimizer 子类处理）
+        exec_path = optimizer.get_executable_path(self.parameters)
+
+        if not exec_path:
+            raise OptimizerExecutionError(
+                f"[Task {self.task_id}] 优化器 {self.airline}/{self.optimizer_type} 未配置可执行文件路径"
+            )
+
+        # 将相对路径转换为绝对路径
+        if not os.path.isabs(exec_path):
+            exec_path = os.path.abspath(exec_path)
+
+        # 检查可执行文件是否存在
+        if not os.path.exists(exec_path):
+            logger.warning(
+                "[Task %s] 可执行文件不存在: %s，将尝试直接执行（可能在PATH中）",
+                self.task_id, exec_path
+            )
+
+        # 构建命令：可执行文件 + 工作目录作为参数
+        cmd = [exec_path, self.working_dir]
+
+        # 如果有 input.gz，追加输入文件路径
+        if self.input_file_path and os.path.exists(self.input_file_path):
+            cmd.append(self.input_file_path)
+
+        return cmd
+
     def start(self):
-        """启动任务"""
+        """启动任务
+
+        Returns:
+            True: 启动成功
+
+        Raises:
+            OptimizerNotFoundError: 优化器不存在
+            InputFetchError: 获取输入文件失败
+            OptimizerExecutionError: 启动进程失败
+        """
         optimizer = optimizer_manager.get_optimizer(self.airline, self.optimizer_type)
         if not optimizer:
             self.status = TaskStatus.FAILED
             self.error_message = f"优化器 {self.optimizer_type} 不存在"
             self._save_to_redis()
-            return False
-        
-        # 尝试从Live Server获取input.gz
-        if not self._fetch_input_data():
-            logger.warning("[Task %s] 无法获取input.gz，将使用模拟模式", self.task_id)
-        
-        exec_path = optimizer.get_executable_path()
-        
-        # 构建执行命令（当前为模拟模式）
-        if os.name == "nt":
-            cmd = ["cmd.exe", "/c", "echo", f"Running {self.airline} {optimizer.get_name()} optimizer..."]
-        else:
-            cmd = ["sh", "-c", f"echo Running {self.airline} {optimizer.get_name()} optimizer... && sleep 5"]
-        
+            raise OptimizerNotFoundError(self.error_message)
+
+        # 从Live Server获取input.gz（如果启用了server_integration）
         try:
+            self._fetch_input_data()
+        except InputFetchError as e:
+            self.status = TaskStatus.FAILED
+            self.error_message = str(e)
+            self._save_to_redis()
+            raise
+
+        # 构建执行命令
+        try:
+            cmd = self._build_command(optimizer)
+        except OptimizerExecutionError as e:
+            self.status = TaskStatus.FAILED
+            self.error_message = str(e)
+            self._save_to_redis()
+            raise
+
+        try:
+            logger.info("[Task %s] 执行命令: %s, 工作目录: %s", self.task_id, cmd, self.working_dir)
+
             self.process = subprocess.Popen(
                 cmd,
                 cwd=self.working_dir,
@@ -163,23 +278,75 @@ class Task:
             self.status = TaskStatus.RUNNING
             self.start_time = time.time()
             self._save_to_redis()
-            
-            logger.info("[Task %s] 任务已启动, airline=%s, type=%s, pid=%d", 
-                       self.task_id, self.airline, self.optimizer_type, self.process.pid)
-            
+
+            logger.info("[Task %s] 任务已启动, airline=%s, type=%s, pid=%d",
+                         self.task_id, self.airline, self.optimizer_type, self.process.pid)
+
+            # 启动 stdout/stderr 读取线程（防止管道缓冲区满导致死锁）
+            stdout_thread = threading.Thread(
+                target=self._read_stream, args=(self.process.stdout, self._stdout_lines, "stdout"),
+                name=f"stdout-{self.task_id[:8]}", daemon=True
+            )
+            stderr_thread = threading.Thread(
+                target=self._read_stream, args=(self.process.stderr, self._stderr_lines, "stderr"),
+                name=f"stderr-{self.task_id[:8]}", daemon=True
+            )
+            stdout_thread.start()
+            stderr_thread.start()
+
             # 启动监控线程
-            monitor_thread = threading.Thread(target=self._monitor_task, name=f"monitor-{self.task_id[:8]}")
-            monitor_thread.daemon = True
+            monitor_thread = threading.Thread(
+                target=self._monitor_task,
+                args=(stdout_thread, stderr_thread),
+                name=f"monitor-{self.task_id[:8]}", daemon=True
+            )
             monitor_thread.start()
-            
+
             return True
         except Exception as e:
             self.status = TaskStatus.FAILED
             self.error_message = str(e)
             self._save_to_redis()
-            logger.error("[Task %s] 启动失败: %s", self.task_id, e, exc_info=True)
-            return False
-    
+            raise OptimizerExecutionError(f"[Task {self.task_id}] 启动失败: {e}") from e
+
+    def _read_stream(self, stream, lines: List[str], name: str):
+        """持续读取子进程的输出流，防止管道缓冲区满导致死锁"""
+        try:
+            for line in stream:
+                line = line.rstrip('\n')
+                lines.append(line)
+                # 尝试从stdout中解析进度信息
+                if name == "stdout":
+                    self._parse_progress(line)
+            stream.close()
+        except Exception as e:
+            logger.debug("[Task %s] 读取%s结束: %s", self.task_id, name, e)
+
+    def _parse_progress(self, line: str):
+        """从优化器输出中解析进度信息
+
+        支持的格式:
+        - PROGRESS:50      (直接百分比)
+        - PROGRESS:50/100  (当前/总数)
+        """
+        line = line.strip()
+        if not line.startswith("PROGRESS:"):
+            return
+
+        try:
+            value = line[len("PROGRESS:"):]
+            if "/" in value:
+                current, total = value.split("/", 1)
+                progress = int(int(current) / int(total) * 100)
+            else:
+                progress = int(value)
+
+            progress = max(0, min(100, progress))
+            self.progress = progress
+            redis_manager.update_task_progress(self.task_id, progress)
+        except (ValueError, ZeroDivisionError):
+            pass
+
     def stop(self):
         """停止任务"""
         if self.status == TaskStatus.RUNNING and self.process:
@@ -189,7 +356,6 @@ class Task:
                 try:
                     self.process.wait(timeout=5)
                 except subprocess.TimeoutExpired:
-                    # terminate超时，强制kill
                     logger.warning("[Task %s] terminate超时，强制kill进程", self.task_id)
                     self.process.kill()
                     self.process.wait(timeout=3)
@@ -204,46 +370,58 @@ class Task:
                 logger.error("[Task %s] 停止任务异常: %s", self.task_id, e, exc_info=True)
                 return False
         return False
-    
-    def _monitor_task(self):
+
+    def _monitor_task(self, stdout_thread: threading.Thread, stderr_thread: threading.Thread):
         """监控任务执行状态"""
         if not self.process:
             return
-        
+
         task_timeout = config_manager.get_config().tasks.timeout
-        
-        # 模拟进度更新
-        for i in range(101):
-            if self.status != TaskStatus.RUNNING:
-                break
-            self.progress = i
-            redis_manager.update_task_progress(self.task_id, i)
-            time.sleep(0.05)
-        
+
         # 等待进程结束（带超时）
         try:
-            stdout, stderr = self.process.communicate(timeout=task_timeout)
+            self.process.wait(timeout=task_timeout)
         except subprocess.TimeoutExpired:
             logger.warning("[Task %s] 进程执行超时(%ds)，强制终止", self.task_id, task_timeout)
             self.process.kill()
-            stdout, stderr = self.process.communicate(timeout=10)
-        
+            self.process.wait(timeout=10)
+
+        # 等待 stdout/stderr 读取线程完成
+        stdout_thread.join(timeout=5)
+        stderr_thread.join(timeout=5)
+
         if self.status == TaskStatus.RUNNING:
             if self.process.returncode == 0:
+                # 优化器执行成功
+                self.progress = 100
+                redis_manager.update_task_progress(self.task_id, 100)
+
+                # 提交输出文件到Live Server
+                try:
+                    self._submit_output_data()
+                except OutputSubmitError as e:
+                    logger.error("[Task %s] %s", self.task_id, e)
+                    # 输出提交失败不影响任务状态标记为完成
+                    # 因为优化结果文件已经在本地生成
+
+                # 移动结果文件到finished目录
+                file_manager.move_to_finished(self.working_dir)
+
                 self.status = TaskStatus.COMPLETED
                 logger.info("[Task %s] 任务执行完成", self.task_id)
             else:
+                stderr_text = "\n".join(self._stderr_lines)
                 self.status = TaskStatus.FAILED
-                self.error_message = stderr
-                logger.error("[Task %s] 任务执行失败, returncode=%d, stderr=%s", 
-                           self.task_id, self.process.returncode, stderr)
+                self.error_message = stderr_text or f"进程退出码: {self.process.returncode}"
+                logger.error("[Task %s] 任务执行失败, returncode=%d, stderr=%s",
+                             self.task_id, self.process.returncode, stderr_text[:500])
             self.end_time = time.time()
             self._save_to_redis()
-    
+
     def get_status(self) -> str:
         """获取任务状态"""
         return self.status.value
-    
+
     def get_progress(self) -> int:
         """获取任务进度"""
         return self.progress
@@ -258,79 +436,88 @@ class TaskManager:
         self.airline_tasks: Dict[str, List[str]] = {}  # airline -> list of task_ids
         self.max_concurrent = config_manager.get_config().tasks.max_concurrent
         self.lock = threading.Lock()
-    
+
     def create_task(self, airline: str, optimizer_type: str, parameters: dict = None,
-                   url: str = None, token: str = None, user: str = None) -> Optional[str]:
-        """创建新任务"""
-        # 检查优化器是否存在（锁外执行，不涉及共享状态修改）
+                   url: str = None, token: str = None, user: str = None) -> str:
+        """创建新任务
+
+        Returns:
+            task_id
+
+        Raises:
+            OptimizerNotFoundError: 优化器不可用
+            TaskLimitError: 已达最大并发数
+        """
         if not optimizer_manager.validate_optimizer(airline, optimizer_type):
-            logger.warning("创建任务失败: 航司 %s 的优化器 %s 不可用", airline, optimizer_type)
-            return None
-        
+            raise OptimizerNotFoundError(f"航司 {airline} 的优化器 {optimizer_type} 不可用")
+
         with self.lock:
-            # 并发数检查在锁内，保证原子性
             local_running_count = len([t for t in self.tasks.values() if t.status == TaskStatus.RUNNING])
             if local_running_count >= self.max_concurrent:
-                logger.warning("创建任务失败: 已达最大并发数 %d", self.max_concurrent)
-                return None
-            
+                raise TaskLimitError(f"已达最大并发数 {self.max_concurrent}")
+
             task_id = str(uuid.uuid4())
             task = Task(task_id, airline, optimizer_type, parameters, url, token, user)
             self.tasks[task_id] = task
-            
+
             if airline not in self.airline_tasks:
                 self.airline_tasks[airline] = []
             self.airline_tasks[airline].append(task_id)
-        
+
         logger.info("任务创建成功: task_id=%s, airline=%s, type=%s", task_id, airline, optimizer_type)
         return task_id
-    
+
     def start_task(self, task_id: str) -> bool:
-        """启动任务"""
+        """启动任务
+
+        Raises:
+            TaskNotFoundError: 任务不存在
+            TaskStateError: 任务状态不正确
+            TaskLimitError: 已达最大并发数
+        """
         with self.lock:
             task = self.tasks.get(task_id)
             if not task:
                 task_data = redis_manager.get_task(task_id)
                 if task_data:
-                    logger.warning("任务 %s 在其他服务器上，无法在本地启动", task_id)
-                return False
-            
+                    raise TaskStateError(f"任务 {task_id} 在其他服务器上，无法在本地启动")
+                raise TaskNotFoundError(f"任务 {task_id} 不存在")
+
             if task.status != TaskStatus.PENDING:
-                return False
-            
+                raise TaskStateError(f"任务 {task_id} 当前状态为 {task.status.value}，无法启动")
+
             local_running_count = len([t for t in self.tasks.values() if t.status == TaskStatus.RUNNING])
             if local_running_count >= self.max_concurrent:
-                return False
-        
+                raise TaskLimitError(f"已达最大并发数 {self.max_concurrent}")
+
         # 在锁外启动任务
         return task.start()
-    
+
     def stop_task(self, task_id: str) -> bool:
         """停止任务"""
-        # 在锁内仅获取task引用，在锁外执行stop（避免锁内等待进程）
         task = None
         with self.lock:
             task = self.tasks.get(task_id)
-        
+
         if task:
             return task.stop()
-        
+
         # 检查Redis中的任务（可能在其他服务器）
         task_data = redis_manager.get_task(task_id)
         if task_data:
             redis_manager.publish_task_event(task_id, "stop", {})
             logger.info("已通过Redis发布停止事件: task_id=%s", task_id)
             return True
-        
+
         return False
-    
+
     def get_task(self, task_id: str) -> Optional[Task]:
         """获取任务"""
         with self.lock:
             task = self.tasks.get(task_id)
             if task:
                 return task
-        
+
         # 检查Redis中的任务
         task_data = redis_manager.get_task(task_id)
         if task_data:
@@ -346,20 +533,20 @@ class TaskManager:
             task.end_time = task_data['end_time']
             task.error_message = task_data['error_message']
             return task
-        
+
         return None
-    
+
     def get_all_tasks(self, airline: str = None) -> List[dict]:
         """获取所有任务信息"""
         redis_tasks = redis_manager.get_all_tasks(airline)
-        
+
         with self.lock:
             if airline:
                 task_ids = self.airline_tasks.get(airline, [])
                 local_tasks = [self.tasks[task_id] for task_id in task_ids if task_id in self.tasks]
             else:
                 local_tasks = list(self.tasks.values())
-        
+
         local_tasks_dict = [{
             "task_id": task.task_id,
             "airline": task.airline,
@@ -370,26 +557,26 @@ class TaskManager:
             "end_time": task.end_time,
             "error_message": task.error_message
         } for task in local_tasks]
-        
+
         task_map = {}
         for task in redis_tasks:
             task_map[task['task_id']] = task
         for task in local_tasks_dict:
             task_map[task['task_id']] = task
-        
+
         return list(task_map.values())
-    
+
     def get_running_tasks(self, airline: str = None) -> List[dict]:
         """获取运行中任务"""
         redis_tasks = redis_manager.get_running_tasks(airline)
-        
+
         with self.lock:
             if airline:
                 task_ids = self.airline_tasks.get(airline, [])
                 local_tasks = [self.tasks[task_id] for task_id in task_ids if task_id in self.tasks and self.tasks[task_id].status == TaskStatus.RUNNING]
             else:
                 local_tasks = [t for t in self.tasks.values() if t.status == TaskStatus.RUNNING]
-        
+
         local_tasks_dict = [{
             "task_id": task.task_id,
             "airline": task.airline,
@@ -398,15 +585,15 @@ class TaskManager:
             "progress": task.get_progress(),
             "start_time": task.start_time
         } for task in local_tasks]
-        
+
         task_map = {}
         for task in redis_tasks:
             task_map[task['task_id']] = task
         for task in local_tasks_dict:
             task_map[task['task_id']] = task
-        
+
         return list(task_map.values())
-    
+
     def cleanup_tasks(self):
         """清理已完成的任务（超过TTL的）"""
         current_time = time.time()
@@ -416,10 +603,10 @@ class TaskManager:
                 if task.status in [TaskStatus.COMPLETED, TaskStatus.FAILED, TaskStatus.STOPPED]:
                     if task.end_time and (current_time - task.end_time) > self.COMPLETED_TASK_TTL:
                         completed_task_ids.append(task_id)
-            
+
             if completed_task_ids:
                 logger.info("清理已完成任务: %d 个", len(completed_task_ids))
-            
+
             for task_id in completed_task_ids:
                 task = self.tasks[task_id]
                 if task.airline in self.airline_tasks:
@@ -427,12 +614,12 @@ class TaskManager:
                         self.airline_tasks[task.airline].remove(task_id)
                 del self.tasks[task_id]
                 redis_manager.delete_task(task_id)
-    
+
     def stop_all_tasks(self):
         """停止所有运行中的任务（服务关闭时调用）"""
         with self.lock:
             running_tasks = [t for t in self.tasks.values() if t.status == TaskStatus.RUNNING]
-        
+
         for task in running_tasks:
             logger.info("服务关闭，正在停止任务: %s", task.task_id)
             task.stop()

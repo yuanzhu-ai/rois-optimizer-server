@@ -72,17 +72,28 @@ app = FastAPI(
     lifespan=lifespan
 )
 
-# CORS配置 - 生产环境应限制origins
+# CORS配置 - 从配置文件读取，生产环境应在config.yaml中限制origins
+from src.config.config import config_manager
+_cors_config = config_manager.get_config().server.cors
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=_cors_config.allow_origins,
     allow_credentials=False,  # 与 allow_origins=["*"] 配合时必须为False
-    allow_methods=["GET", "POST"],
-    allow_headers=["X-Airline", "X-API-Key", "Authorization", "Content-Type"],
+    allow_methods=_cors_config.allow_methods,
+    allow_headers=_cors_config.allow_headers,
 )
 
 
 # 全局异常处理器
+from src.exceptions import OptimizerServerError
+
+@app.exception_handler(OptimizerServerError)
+async def optimizer_server_error_handler(request: Request, exc: OptimizerServerError):
+    """处理业务异常"""
+    logger.warning("业务异常: %s, path=%s", exc, request.url.path)
+    return JSONResponse(status_code=400, content={"detail": str(exc)})
+
+
 @app.exception_handler(ValueError)
 async def value_error_handler(request: Request, exc: ValueError):
     """处理值错误（如航司不存在、优化器类型不支持等）"""

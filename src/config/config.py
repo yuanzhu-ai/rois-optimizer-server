@@ -1,4 +1,5 @@
 import os
+import re
 import yaml
 from pydantic_settings import BaseSettings
 from typing import Dict, Any, Optional
@@ -48,10 +49,17 @@ class AirlineConfig(BaseSettings):
     optimizers: OptimizersConfig
 
 
+class CorsConfig(BaseSettings):
+    allow_origins: list = ["*"]  # 生产环境应配置为具体域名列表
+    allow_methods: list = ["GET", "POST"]
+    allow_headers: list = ["X-Airline", "X-API-Key", "Authorization", "Content-Type"]
+
+
 class ServerConfig(BaseSettings):
     host: str = "0.0.0.0"
     port: int = 8000
     debug: bool = True
+    cors: CorsConfig = CorsConfig()
 
 
 class APIKeyConfig(BaseSettings):
@@ -126,6 +134,25 @@ class ConfigManager:
             cls._instance = super(ConfigManager, cls).__new__(cls)
         return cls._instance
 
+    @staticmethod
+    def _resolve_env_vars(data):
+        """递归解析配置值中的环境变量引用
+
+        支持格式: ${ENV_VAR_NAME:default_value} 或 ${ENV_VAR_NAME}
+        """
+        if isinstance(data, str):
+            pattern = r'\$\{([^}:]+)(?::([^}]*))?\}'
+            def replacer(match):
+                env_name = match.group(1)
+                default_value = match.group(2) if match.group(2) is not None else match.group(0)
+                return os.environ.get(env_name, default_value)
+            return re.sub(pattern, replacer, data)
+        elif isinstance(data, dict):
+            return {k: ConfigManager._resolve_env_vars(v) for k, v in data.items()}
+        elif isinstance(data, list):
+            return [ConfigManager._resolve_env_vars(item) for item in data]
+        return data
+
     def load_config(self, config_path: str = None):
         """加载配置文件"""
         if config_path is None:
@@ -142,146 +169,29 @@ class ConfigManager:
         with open(config_path, "r", encoding="utf-8") as f:
             config_data = yaml.safe_load(f)
 
+        # 解析环境变量引用
+        config_data = self._resolve_env_vars(config_data)
+
         self._config = Config(**config_data)
         return self._config
 
     def _create_default_config(self):
-        """创建默认配置"""
-        return Config(
-            airlines={
-                "F8": AirlineConfig(
-                    optimizers=OptimizersConfig(
-                        PO=OptimizerTypeConfig(
-                            name="Pairing Optimizer",
-                            linux=OptimizerOSConfig(path="./F8/po.sh"),
-                            windows=OptimizerOSConfig(path="./F8/po.bat"),
-                            url=OptimizerURLConfig(
-                                input="/api/orengine/po/comptxt",
-                                output="/api/orengine/po/solution"
-                            ),
-                            server_integration=True
-                        ),
-                        RO=OptimizerTypeConfig(
-                            name="Roster Optimizer",
-                            linux=OptimizerOSConfig(path="./F8/ro.sh"),
-                            windows=OptimizerOSConfig(path="./F8/ro.bat"),
-                            url=OptimizerURLConfig(
-                                input="/api/orengine/ro/comptxt",
-                                output="/api/orengine/ro/solution"
-                            ),
-                            server_integration=True
-                        ),
-                        TO=OptimizerTypeConfig(
-                            name="Training Optimizer",
-                            linux=OptimizerOSConfig(path="./F8/to.sh"),
-                            windows=OptimizerOSConfig(path="./F8/to.bat"),
-                            url=OptimizerURLConfig(
-                                input="/api/orengine/to/comptxt",
-                                output="/api/orengine/to/solution"
-                            ),
-                            server_integration=True
-                        ),
-                        Rule=RuleOptimizerConfig(
-                            categories={
-                                "change_flight": RuleCategoryConfig(
-                                    name="Change Flight Rule",
-                                    linux=OptimizerOSConfig(path="./F8/rule_change_flight.sh"),
-                                    windows=OptimizerOSConfig(path="./F8/rule_change_flight.bat"),
-                                    url=OptimizerURLConfig(
-                                        input="/api/orengine/byFlight/comptxt",
-                                        output="/api/orengine/byFlight/save/csv"
-                                    )
-                                ),
-                                "manday": RuleCategoryConfig(
-                                    name="Manday Rule",
-                                    linux=OptimizerOSConfig(path="./F8/rule_manday.sh"),
-                                    windows=OptimizerOSConfig(path="./F8/rule_manday.bat"),
-                                    url=OptimizerURLConfig(
-                                        input="/api/orengine/ro/partial/comptxt",
-                                        output="/api/crewMandayFd/partlySave/csv/comp"
-                                    )
-                                ),
-                                "manday_byCrew": RuleCategoryConfig(
-                                    name="Manday by Crew Rule",
-                                    linux=OptimizerOSConfig(path="./F8/rule_manday_byCrew.sh"),
-                                    windows=OptimizerOSConfig(path="./F8/rule_manday_byCrew.bat"),
-                                    url=OptimizerURLConfig(
-                                        input="/api/orengine/byCrew/comptxt",
-                                        output="/api/crewMandayFd/partlySave/csv/comp"
-                                    )
-                                )
-                            },
-                            server_integration=True
-                        )
-                    )
-                ),
-                "BR": AirlineConfig(
-                    optimizers=OptimizersConfig(
-                        PO=OptimizerTypeConfig(
-                            name="Pairing Optimizer",
-                            linux=OptimizerOSConfig(path="./BR/po.sh"),
-                            windows=OptimizerOSConfig(path="./BR/po.bat"),
-                            url=OptimizerURLConfig(
-                                input="/api/orengine/po/comptxt",
-                                output="/api/orengine/po/solution"
-                            ),
-                            server_integration=True
-                        ),
-                        RO=OptimizerTypeConfig(
-                            name="Roster Optimizer",
-                            linux=OptimizerOSConfig(path="./BR/ro.sh"),
-                            windows=OptimizerOSConfig(path="./BR/ro.bat"),
-                            url=OptimizerURLConfig(
-                                input="/api/orengine/ro/comptxt",
-                                output="/api/orengine/ro/solution"
-                            ),
-                            server_integration=True
-                        ),
-                        TO=OptimizerTypeConfig(
-                            name="Training Optimizer",
-                            linux=OptimizerOSConfig(path="./BR/to.sh"),
-                            windows=OptimizerOSConfig(path="./BR/to.bat"),
-                            url=OptimizerURLConfig(
-                                input="/api/orengine/to/comptxt",
-                                output="/api/orengine/to/solution"
-                            ),
-                            server_integration=True
-                        ),
-                        Rule=RuleOptimizerConfig(
-                            categories={
-                                "change_flight": RuleCategoryConfig(
-                                    name="Change Flight Rule",
-                                    linux=OptimizerOSConfig(path="./BR/rule_change_flight.sh"),
-                                    windows=OptimizerOSConfig(path="./BR/rule_change_flight.bat"),
-                                    url=OptimizerURLConfig(
-                                        input="/api/orengine/byFlight/comptxt",
-                                        output="/api/orengine/byFlight/save/csv"
-                                    )
-                                ),
-                                "manday": RuleCategoryConfig(
-                                    name="Manday Rule",
-                                    linux=OptimizerOSConfig(path="./BR/rule_manday.sh"),
-                                    windows=OptimizerOSConfig(path="./BR/rule_manday.bat"),
-                                    url=OptimizerURLConfig(
-                                        input="/api/orengine/ro/partial/comptxt",
-                                        output="/api/crewMandayFd/partlySave/csv/comp"
-                                    )
-                                ),
-                                "manday_byCrew": RuleCategoryConfig(
-                                    name="Manday by Crew Rule",
-                                    linux=OptimizerOSConfig(path="./BR/rule_manday_byCrew.sh"),
-                                    windows=OptimizerOSConfig(path="./BR/rule_manday_byCrew.bat"),
-                                    url=OptimizerURLConfig(
-                                        input="/api/orengine/byCrew/comptxt",
-                                        output="/api/crewMandayFd/partlySave/csv/comp"
-                                    )
-                                )
-                            },
-                            server_integration=True
-                        )
-                    )
-                )
-            }
+        """创建默认配置 — 从 config.yaml.example 加载，避免硬编码重复"""
+        import logging
+        _logger = logging.getLogger(__name__)
+
+        # 尝试从 config.yaml.example 加载默认配置
+        example_path = os.path.join(os.path.dirname(__file__), "config.yaml.example")
+        if os.path.exists(example_path):
+            _logger.info("配置文件不存在，从 config.yaml.example 加载默认配置")
+            with open(example_path, "r", encoding="utf-8") as f:
+                config_data = yaml.safe_load(f)
+            config_data = self._resolve_env_vars(config_data)
+            return Config(**config_data)
+
+        # config.yaml.example 也不存在时，抛出明确错误
+        raise FileNotFoundError(
+            "未找到配置文件。请复制 src/config/config.yaml.example 为 src/config/config.yaml 并修改配置。"
         )
 
     def get_config(self) -> Config:

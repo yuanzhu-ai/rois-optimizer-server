@@ -2,15 +2,29 @@ server:
   host: "0.0.0.0"
   port: 8000
   debug: true
+  cors:
+    # 生产环境应配置为具体域名列表，如 ["https://your-domain.com"]
+    allow_origins:
+      - "*"
+    allow_methods:
+      - "GET"
+      - "POST"
+    allow_headers:
+      - "X-Airline"
+      - "X-API-Key"
+      - "Authorization"
+      - "Content-Type"
 
 auth:
   enabled: true  # 启用认证
   api_key:
     enabled: true  # 启用API Key认证
-    key: "your_api_key_here"  # 实施阶段配置的固定API Key
+    # 支持环境变量: export ROIS_API_KEY=your_secret_key
+    key: "${ROIS_API_KEY:your_api_key_here}"
   bearer_token:
     enabled: false
-    token: "your_bearer_token_here"
+    # 支持环境变量: export ROIS_BEARER_TOKEN=your_secret_token
+    token: "${ROIS_BEARER_TOKEN:your_bearer_token_here}"
   airline_auth:
     BR:
       api_key: ""  # 航司特定的API Key（可选）

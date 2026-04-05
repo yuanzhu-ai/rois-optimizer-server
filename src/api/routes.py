@@ -9,6 +9,11 @@ from src.api.models import (
     OptimizersResponse, TaskListResponse
 )
 from src.version import get_version, GIT_COMMIT_ID, BUILD_TIMESTAMP, COMMIT_AUTHOR
+from src.exceptions import (
+    OptimizerNotFoundError, OptimizerExecutionError,
+    TaskNotFoundError, TaskLimitError, TaskStateError,
+    InputFetchError, OutputSubmitError,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -23,25 +28,31 @@ async def start_optimization(request: OptimizeStartRequest, airline: str = Depen
     valid_types = ["PO", "RO", "TO", "Rule"]
     if request.type not in valid_types:
         raise HTTPException(status_code=400, detail=f"不支持的优化器类型: {request.type}，支持: {valid_types}")
-    
+
     # Rule类型必须有category参数
     if request.type == "Rule" and "category" not in request.parameters:
         raise HTTPException(status_code=400, detail="Rule类型必须在parameters中指定category参数")
-    
+
     # PO/RO/TO类型必须有scenarioId
     if request.type in ["PO", "RO", "TO"] and "scenarioId" not in request.parameters:
         raise HTTPException(status_code=400, detail=f"{request.type}类型必须在parameters中指定scenarioId参数")
-    
+
     logger.info("收到启动任务请求: airline=%s, type=%s, user=%s", airline, request.type, request.user)
-    
-    task_id = task_manager.create_task(airline, request.type, request.parameters, request.url, request.token, request.user)
-    if not task_id:
-        raise HTTPException(status_code=400, detail="创建任务失败，可能已达最大并发数或优化器不可用")
-    
-    success = task_manager.start_task(task_id)
-    if not success:
-        raise HTTPException(status_code=400, detail="启动任务失败")
-    
+
+    try:
+        task_id = task_manager.create_task(airline, request.type, request.parameters, request.url, request.token, request.user)
+        task_manager.start_task(task_id)
+    except OptimizerNotFoundError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except TaskLimitError as e:
+        raise HTTPException(status_code=429, detail=str(e))
+    except (TaskStateError, TaskNotFoundError) as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except InputFetchError as e:
+        raise HTTPException(status_code=502, detail=str(e))
+    except OptimizerExecutionError as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
     return TaskStartResponse(task_id=task_id, status="started")
 
 @router.post("/optimize/stop/{task_id}", response_model=TaskStopResponse)
@@ -50,7 +61,7 @@ async def stop_optimization(task_id: str, _: str = Depends(verify_token)):
     success = task_manager.stop_task(task_id)
     if not success:
         raise HTTPException(status_code=400, detail="停止任务失败，任务可能不存在或未在运行")
-    
+
     return TaskStopResponse(task_id=task_id, status="stopped")
 
 @router.get("/optimize/status/{task_id}", response_model=TaskStatusResponse)
@@ -59,7 +70,7 @@ async def get_optimization_status(task_id: str, _: str = Depends(verify_token)):
     task = task_manager.get_task(task_id)
     if not task:
         raise HTTPException(status_code=404, detail="任务不存在")
-    
+
     return TaskStatusResponse(
         task_id=task_id,
         status=task.get_status(),
@@ -74,7 +85,7 @@ async def get_optimization_progress(task_id: str, _: str = Depends(verify_token)
     task = task_manager.get_task(task_id)
     if not task:
         raise HTTPException(status_code=404, detail="任务不存在")
-    
+
     return TaskProgressResponse(
         task_id=task_id,
         progress=task.get_progress(),
