@@ -1,0 +1,180 @@
+# 优化引擎调度工具配置文件
+
+# 服务器配置
+server:
+  host: 0.0.0.0
+  port: 8000
+  debug: true
+
+# 认证配置
+auth:
+  enabled: false  # 是否启用认证
+  # API Key认证
+  api_key:
+    enabled: false  # 是否启用API Key认证
+    key: your_api_key_here  # API Key值
+  # Bearer Token认证
+  bearer_token:
+    enabled: false  # 是否启用Bearer Token认证
+    token: your_bearer_token_here  # Bearer Token值
+  # 航司认证配置
+  airline_auth:
+    F8:
+      api_key: f8_api_key_here  # F8航司API Key
+      bearer_token: f8_bearer_token_here  # F8航司Bearer Token
+    BR:
+      api_key: br_api_key_here  # BR航司API Key
+      bearer_token: br_bearer_token_here  # BR航司Bearer Token
+
+# 文件路径配置
+paths:
+  working_dir: ./workspace
+  finished_dir: ./finished
+  archive_dir: ./archive
+  temp_dir: ./temp
+
+# 航司配置
+airlines:
+  F8:
+    optimizers:
+      PO:
+        name: Pairing Optimizer
+        server_integration: true  # true: server处理input/output传输; false: 优化器自身处理
+        url:
+          input: /api/orengine/po/comptxt
+          output: /api/orengine/po/solution
+        linux:
+          path: ./F8/po.sh
+        windows:
+          path: ./F8/po.bat
+      RO:
+        name: Roster Optimizer
+        server_integration: true  # true: server处理input/output传输; false: 优化器自身处理
+        url:
+          input: /api/orengine/ro/comptxt
+          output: /api/orengine/ro/solution
+        linux:
+          path: ./F8/ro.sh
+        windows:
+          path: ./F8/ro.bat
+      TO:
+        name: Training Optimizer
+        server_integration: true  # true: server处理input/output传输; false: 优化器自身处理
+        url:
+          input: /api/orengine/to/comptxt
+          output: /api/orengine/to/solution
+        linux:
+          path: ./F8/to.sh
+        windows:
+          path: ./F8/to.bat
+      Rule:
+        server_integration: true  # true: server处理input/output传输; false: 优化器自身处理
+        categories:
+          change_flight:
+            name: Change Flight Rule
+            url:
+              input: /api/orengine/byFlight/comptxt
+              output: /api/orengine/byFlight/save/csv
+            linux:
+              path: ./F8/rule_change_flight.sh
+            windows:
+              path: ./F8/rule_change_flight.bat
+          manday:
+            name: Manday Rule
+            url:
+              input: /api/orengine/ro/partial/comptxt
+              output: /api/crewMandayFd/partlySave/csv/comp
+            linux:
+              path: ./F8/rule_manday.sh
+            windows:
+              path: ./F8/rule_manday.bat
+          manday_byCrew:
+            name: Manday by Crew Rule
+            url:
+              input: /api/orengine/byCrew/comptxt
+              output: /api/crewMandayFd/partlySave/csv/comp
+            linux:
+              path: ./F8/rule_manday_byCrew.sh
+            windows:
+              path: ./F8/rule_manday_byCrew.bat
+  BR:
+    optimizers:
+      PO:
+        name: Pairing Optimizer
+        server_integration: true  # true: server处理input/output传输; false: 优化器自身处理
+        url:
+          input: /api/orengine/po/comptxt
+          output: /api/orengine/po/solution
+        linux:
+          path: ./BR/po.sh
+        windows:
+          path: ./BR/po.bat
+      RO:
+        name: Roster Optimizer
+        server_integration: true  # true: server处理input/output传输; false: 优化器自身处理
+        url:
+          input: /api/orengine/ro/comptxt
+          output: /api/orengine/ro/solution
+        linux:
+          path: ./BR/ro.sh
+        windows:
+          path: ./BR/ro.bat
+      TO:
+        name: Training Optimizer
+        server_integration: true  # true: server处理input/output传输; false: 优化器自身处理
+        url:
+          input: /api/orengine/to/comptxt
+          output: /api/orengine/to/solution
+        linux:
+          path: ./BR/to.sh
+        windows:
+          path: ./BR/to.bat
+      Rule:
+        server_integration: true  # true: server处理input/output传输; false: 优化器自身处理
+        categories:
+          change_flight:
+            name: Change Flight Rule
+            url:
+              input: /api/orengine/byFlight/comptxt
+              output: /api/orengine/byFlight/save/csv
+            linux:
+              path: ./BR/rule_change_flight.sh
+            windows:
+              path: ./BR/rule_change_flight.bat
+          manday:
+            name: Manday Rule
+            url:
+              input: /api/orengine/ro/partial/comptxt
+              output: /api/crewMandayFd/partlySave/csv/comp
+            linux:
+              path: ./BR/rule_manday.sh
+            windows:
+              path: ./BR/rule_manday.bat
+          manday_byCrew:
+            name: Manday by Crew Rule
+            url:
+              input: /api/orengine/byCrew/comptxt
+              output: /api/crewMandayFd/partlySave/csv/comp
+            linux:
+              path: ./BR/rule_manday_byCrew.sh
+            windows:
+              path: ./BR/rule_manday_byCrew.bat
+
+# 文件管理配置
+file_management:
+  archive_days: 1  # 隔天归档
+  cleanup_days: 30  # 30天后清理
+
+# 任务配置
+tasks:
+  max_concurrent: 10
+  timeout: 3600  # 任务超时时间（秒）
+
+# Redis配置
+redis:
+  enabled: false  # 是否启用Redis
+  host: localhost  # Redis主机
+  port: 6379  # Redis端口
+  password: null  # Redis密码
+  db: 0  # Redis数据库
+  task_ttl: 3600  # 任务数据过期时间（秒）

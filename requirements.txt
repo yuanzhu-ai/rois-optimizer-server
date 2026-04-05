@@ -1,0 +1,8 @@
+fastapi
+uvicorn
+pydantic
+pydantic-settings
+pyyaml
+requests
+python-multipart
+redis

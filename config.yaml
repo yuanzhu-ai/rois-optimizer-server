@@ -1,0 +1,175 @@
+server:
+  host: "0.0.0.0"
+  port: 8000
+  debug: true
+
+auth:
+  enabled: true  # 启用认证
+  api_key:
+    enabled: true  # 启用API Key认证
+    key: "your_api_key_here"  # 实施阶段配置的固定API Key
+  bearer_token:
+    enabled: false
+    token: "your_bearer_token_here"
+  airline_auth:
+    BR:
+      api_key: ""  # 航司特定的API Key（可选）
+      bearer_token: ""
+    F8:
+      api_key: ""
+      bearer_token: ""
+
+paths:
+  working_dir: "./workspace"
+  finished_dir: "./finished"
+  archive_dir: "./archive"
+  temp_dir: "./temp"
+
+file_management:
+  archive_days: 1
+  cleanup_days: 30
+
+tasks:
+  max_concurrent: 10
+  timeout: 3600
+
+# HTTP客户端配置
+http_client:
+  # Live Server请求超时时间（秒）
+  # 注：input.gz生成可能需要1-3分钟，当请求localhost时可能需要更长时间
+  # 建议设置20分钟（1200秒）以确保有足够时间处理
+  timeout: 1200
+
+redis:
+  enabled: false
+  host: "localhost"
+  port: 6379
+  password: null
+  db: 0
+  task_ttl: 3600
+
+airlines:
+  BR:
+    optimizers:
+      PO:
+        name: "Pairing Optimizer"
+        linux:
+          path: "./BR/po.sh"
+        windows:
+          path: "./BR/po.bat"
+        url:
+          input: "/api/orengine/po/comptxt"
+          output: "/api/orengine/po/solution"
+        server_integration: true
+      RO:
+        name: "Roster Optimizer"
+        linux:
+          path: "./BR/ro.sh"
+        windows:
+          path: "./BR/ro.bat"
+        url:
+          input: "/api/orengine/ro/comptxt"
+          output: "/api/orengine/ro/solution"
+        server_integration: true
+      TO:
+        name: "Training Optimizer"
+        linux:
+          path: "./BR/to.sh"
+        windows:
+          path: "./BR/to.bat"
+        url:
+          input: "/api/orengine/to/comptxt"
+          output: "/api/orengine/to/solution"
+        server_integration: true
+      Rule:
+        categories:
+          change_flight:
+            name: "Change Flight Rule"
+            linux:
+              path: "./BR/rule_change_flight.sh"
+            windows:
+              path: "./BR/rule_change_flight.bat"
+            url:
+              input: "/api/orengine/byFlight/comptxt"
+              output: "/api/orengine/byFlight/save/csv"
+          manday:
+            name: "Manday Rule"
+            linux:
+              path: "./BR/rule_manday.sh"
+            windows:
+              path: "./BR/rule_manday.bat"
+            url:
+              input: "/api/orengine/ro/partial/comptxt"
+              output: "/api/crewMandayFd/partlySave/csv/comp"
+          manday_byCrew:
+            name: "Manday by Crew Rule"
+            linux:
+              path: "./BR/rule_manday_byCrew.sh"
+            windows:
+              path: "./BR/rule_manday_byCrew.bat"
+            url:
+              input: "/api/orengine/byCrew/comptxt"
+              output: "/api/crewMandayFd/partlySave/csv/comp"
+        server_integration: true
+  F8:
+    optimizers:
+      PO:
+        name: "Pairing Optimizer"
+        linux:
+          path: "./F8/po.sh"
+        windows:
+          path: "./F8/po.bat"
+        url:
+          input: "/api/orengine/po/comptxt"
+          output: "/api/orengine/po/solution"
+        server_integration: true
+      RO:
+        name: "Roster Optimizer"
+        linux:
+          path: "./F8/ro.sh"
+        windows:
+          path: "./F8/ro.bat"
+        url:
+          input: "/api/orengine/ro/comptxt"
+          output: "/api/orengine/ro/solution"
+        server_integration: true
+      TO:
+        name: "Training Optimizer"
+        linux:
+          path: "./F8/to.sh"
+        windows:
+          path: "./F8/to.bat"
+        url:
+          input: "/api/orengine/to/comptxt"
+          output: "/api/orengine/to/solution"
+        server_integration: true
+      Rule:
+        categories:
+          change_flight:
+            name: "Change Flight Rule"
+            linux:
+              path: "./F8/rule_change_flight.sh"
+            windows:
+              path: "./F8/rule_change_flight.bat"
+            url:
+              input: "/api/orengine/byFlight/comptxt"
+              output: "/api/orengine/byFlight/save/csv"
+          manday:
+            name: "Manday Rule"
+            linux:
+              path: "./F8/rule_manday.sh"
+            windows:
+              path: "./F8/rule_manday.bat"
+            url:
+              input: "/api/orengine/ro/partial/comptxt"
+              output: "/api/crewMandayFd/partlySave/csv/comp"
+          manday_byCrew:
+            name: "Manday by Crew Rule"
+            linux:
+              path: "./F8/rule_manday_byCrew.sh"
+            windows:
+              path: "./F8/rule_manday_byCrew.bat"
+            url:
+              input: "/api/orengine/byCrew/comptxt"
+              output: "/api/crewMandayFd/partlySave/csv/comp"
+        server_integration: true
