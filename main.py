@@ -83,6 +83,22 @@ app.add_middleware(
     allow_headers=_cors_config.allow_headers,
 )
 
+# 请求限流 - 按 airline 维度限流
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
+
+_rate_limit_config = config_manager.get_config().auth.rate_limit
+
+def _get_airline_key(request: Request) -> str:
+    """从请求中提取 airline 作为限流 key"""
+    return request.headers.get("X-Airline", "unknown")
+
+if _rate_limit_config.enabled:
+    limiter = Limiter(key_func=_get_airline_key, default_limits=[_rate_limit_config.rate])
+    app.state.limiter = limiter
+    app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+    logger.info("请求限流已启用: %s per airline", _rate_limit_config.rate)
+
 
 # 全局异常处理器
 from src.exceptions import OptimizerServerError

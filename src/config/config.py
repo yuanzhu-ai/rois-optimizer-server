@@ -77,11 +77,25 @@ class AirlineAuthConfig(BaseSettings):
     bearer_token: str = ""
 
 
+class JWTConfig(BaseSettings):
+    enabled: bool = False
+    secret: str = ""  # 与 Live Server 共享的 JWT 签名密钥
+    algorithm: str = "HS256"
+    verify_exp: bool = True  # 是否校验过期时间
+
+
+class RateLimitConfig(BaseSettings):
+    enabled: bool = False
+    rate: str = "15/minute"  # 限流速率，格式: "次数/时间单位"
+
+
 class AuthConfig(BaseSettings):
     enabled: bool = False
+    jwt: JWTConfig = JWTConfig()
     api_key: APIKeyConfig = APIKeyConfig()
     bearer_token: BearerTokenConfig = BearerTokenConfig()
     airline_auth: Dict[str, AirlineAuthConfig] = {}
+    rate_limit: RateLimitConfig = RateLimitConfig()
 
 
 class PathsConfig(BaseSettings):

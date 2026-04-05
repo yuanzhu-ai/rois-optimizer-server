@@ -17,21 +17,38 @@ server:
 
 auth:
   enabled: true  # 启用认证
+
+  # JWT 认证 (推荐 — 复用 Live Server 签发的 JWT)
+  jwt:
+    enabled: true
+    # 与 Live Server 共享的 JWT 签名密钥
+    secret: "${JWT_SECRET}"
+    algorithm: "HS256"
+    verify_exp: true  # 是否校验过期时间
+
+  # API Key 认证 (面向 Live Server 等服务间调用)
   api_key:
-    enabled: true  # 启用API Key认证
-    # 支持环境变量: export ROIS_API_KEY=your_secret_key
+    enabled: true
     key: "${ROIS_API_KEY:your_api_key_here}"
+
+  # 静态 Bearer Token 认证 (向后兼容)
   bearer_token:
     enabled: false
-    # 支持环境变量: export ROIS_BEARER_TOKEN=your_secret_token
     token: "${ROIS_BEARER_TOKEN:your_bearer_token_here}"
+
+  # 航司特定认证 (可选)
   airline_auth:
     BR:
-      api_key: ""  # 航司特定的API Key（可选）
+      api_key: ""
       bearer_token: ""
     F8:
       api_key: ""
       bearer_token: ""
+
+  # 请求限流 (按 airline 维度)
+  rate_limit:
+    enabled: true
+    rate: "15/minute"  # 每航司每分钟最多 15 个请求
 
 paths:
   working_dir: "./workspace"

@@ -21,14 +21,24 @@ server:
 # 认证配置
 auth:
   enabled: false  # 是否启用认证
-  # API Key认证
+  # JWT 认证 (推荐 — 复用 Live Server 签发的 JWT)
+  jwt:
+    enabled: false
+    secret: your_jwt_secret_here  # 与 Live Server 共享的签名密钥
+    algorithm: HS256
+    verify_exp: true
+  # API Key 认证 (面向 Live Server 等服务间调用)
   api_key:
-    enabled: false  # 是否启用API Key认证
-    key: your_api_key_here  # API Key值
-  # Bearer Token认证
+    enabled: false
+    key: your_api_key_here
+  # Bearer Token 认证 (向后兼容)
   bearer_token:
-    enabled: false  # 是否启用Bearer Token认证
-    token: your_bearer_token_here  # Bearer Token值
+    enabled: false
+    token: your_bearer_token_here
+  # 请求限流
+  rate_limit:
+    enabled: false
+    rate: "15/minute"  # 每航司每分钟最多请求数
   # 航司认证配置
   airline_auth:
     F8:

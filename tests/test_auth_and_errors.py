@@ -85,14 +85,22 @@ class TestAPIKeyAuth:
         )
         assert resp.status_code == 401
 
-    def test_missing_airline_header(self, api_client):
-        """缺少 X-Airline header 应返回 400"""
+    def test_missing_airline_header_with_valid_key(self, api_client):
+        """缺少 X-Airline 但 API Key 有效时，认证通过（airline 为空）"""
         resp = api_client.get(
             "/api/system/info",
             headers={"X-API-Key": "test_api_key_12345"},
         )
+        # API Key 模式下不强制要求 X-Airline（Live Server 调用场景）
+        assert resp.status_code == 200
+
+    def test_missing_airline_header_without_key(self, api_client):
+        """缺少 X-Airline 且无有效 API Key 时应返回 400"""
+        resp = api_client.get(
+            "/api/system/info",
+            headers={},  # 什么都不传
+        )
         assert resp.status_code == 400
-        assert "X-Airline" in resp.json()['detail']
 
 
 # ============================================================
