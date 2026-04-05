@@ -320,7 +320,6 @@ pydantic
 | 8 | 完善 Redis 集成，实现任务状态持久化 | P1 | 中 |
 | 9 | 统一异常处理机制 | P1 | 中 |
 | 10 | 文件操作增加并发保护 | P2 | 低 |
-| 11 | API 增加分页和参数校验 | P2 | 低 |
 
 ### Phase 3 — 质量保障
 
@@ -341,7 +340,7 @@ pydantic
 | `config.yaml` | 敏感信息暴露 | | | |
 | `src/tasks/task_manager.py` | 模拟代码未替换; 文件流转未完成 | 子进程死锁; 线程泄漏 | 内存存储不持久 | |
 | `src/api/auth.py` | | | 无限流; Token 未校验格式 | |
-| `src/api/routes.py` | | | 无分页; 类型硬编码 | |
+| `src/api/routes.py` | | | 类型硬编码 | |
 | `src/api/models.py` | | | parameters 无校验 | |
 | `src/config/config.py` | | 默认配置重复 280 行 | 无 schema 校验 | |
 | `src/files/file_manager.py` | | | 并发无保护; 异常被吞 | |
