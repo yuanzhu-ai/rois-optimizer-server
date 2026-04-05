@@ -289,24 +289,27 @@ Content-Type: application/json
    - 签名算法是 `HS256`（HMAC-SHA256）还是 `RS256`（RSA）？
    - 如果是 HS256：Optimizer Server 需要配置相同的 `secret`
    - 如果是 RS256：Optimizer Server 只需要 Live Server 的公钥
-
+     - 使用的是：HS256
 2. **JWT Payload 结构**：
    - 从已有测试 Token 看到的字段有：`iss`, `exp`, `userName`
    - 是否还有 `airline` 或 `role` 等字段？
    - 如果 JWT 中没有 airline，客户端仍需通过 `X-Airline` header 或 body 传入
-
+      - 没有airline 和role 字段，仍需通过 `X-Airline` header 或 body 传入
 3. **是否需要保留 body 中的 `token` 字段**：
    - JWT 模式下，Header 中的 JWT 可以直接用来调用 Live Server
    - 是否仍需要支持客户端在 body 中传一个不同的 token 给 Live Server？
    - 场景：用户用自己的 JWT 鉴权，但指定另一个服务账号的 token 调 Live Server
+     - 可以使用JWT 模式，那么就不用在body中传token了，可以直接使用Header中的JWT，继续传给Live Server
 
 4. **API Key 是否仍然需要**：
    - 是否有脚本/定时任务等无登录态的调用场景？
    - 如果有，API Key 保留；如果没有，可以简化为仅 JWT
+     - 有，除了客户端有JWT Token字符串，Live Server本身也需要调用optimizer-server的接口，去运算Rule中的各种类型的调用，Live Server没有JWT
 
 5. **请求限流需求**：
    - 是否需要限流？如果需要，每分钟允许多少次请求？
    - 限流维度：按 IP？按 airline？按 user？
+     - 需要限流，按 airline，每分钟大约允许 15 个请求
 
 ---
 
