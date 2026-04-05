@@ -1,0 +1,60 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual Environment
+venv/
+env/
+.env
+
+# IDE and Editor
+.idea/
+*.iml
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+logs/
+*.log
+
+# Temporary files
+temp/
+*.tmp
+*.temp
+
+# Build files
+build/
+dist/
+*.egg-info/
+
+# Test files
+.coverage
+coverage.xml
+pytest_cache/
+
+# Application Files
+/output
+/websocket
+.agents/
+.claude/
+CLAUDE.md
+/skills-lock.json
+
+# Workspace and runtime directories
+/workspace/
+/finished/
+/archive/
+/temp/
+
+# Configuration
+/src/config/config.yaml
+
+# Git generated files
+git.properties
