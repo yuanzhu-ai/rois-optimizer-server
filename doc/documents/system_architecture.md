@@ -92,7 +92,11 @@ optimize-server/
 
 #### 2.3.6 API接口模块
 - **功能**：提供RESTful API接口，处理HTTP请求
-- **认证**：基于token的认证机制
+- **认证**：支持三种认证方式，按优先级依次尝试：
+  1. **JWT认证（优先级1）**：基于HS256算法的JWT令牌验证，与Live Server共享密钥
+  2. **API Key认证（优先级2）**：通过`X-API-Key`请求头传递，适用于服务间调用
+  3. **Bearer Token静态认证（优先级3）**：通过`Authorization: Bearer <token>`请求头传递，用于简单场景
+- **速率限制**：基于slowapi实现，默认每航司每分钟15次请求限制
 - **路由**：优化任务管理接口和系统管理接口
 - **航司支持**：所有接口都支持传入airline参数
 
@@ -192,14 +196,23 @@ server:
 # 认证配置
 auth:
   enabled: false  # 是否启用认证
-  # API Key认证
+  # JWT认证（优先级1）：与Live Server共享密钥
+  jwt:
+    enabled: false  # 是否启用JWT认证
+    secret: your_jwt_secret_here  # HS256共享密钥（与Live Server相同）
+    algorithm: HS256  # 签名算法
+  # API Key认证（优先级2）：服务间调用
   api_key:
     enabled: false  # 是否启用API Key认证
     key: your_api_key_here  # API Key值
-  # Bearer Token认证
+  # Bearer Token静态认证（优先级3）
   bearer_token:
     enabled: false  # 是否启用Bearer Token认证
     token: your_bearer_token_here  # Bearer Token值
+  # 速率限制配置
+  rate_limit:
+    enabled: true  # 是否启用速率限制
+    requests_per_minute: 15  # 每航司每分钟最大请求数
   # 航司认证配置
   airline_auth:
     F8:
@@ -457,9 +470,27 @@ redis:
 
 ### 9.1 认证和授权
 
-- 基于token的认证机制
-- 权限控制
-- 调用方传入的token验证
+系统支持三种认证方式，按优先级依次尝试，首个匹配即通过：
+
+1. **JWT认证（优先级1）**
+   - 使用HS256算法的共享密钥签名验证
+   - 与Live Server复用相同的JWT密钥，实现单点登录
+   - 从JWT payload中提取airline、user等信息
+   - 通过`Authorization: Bearer <jwt_token>`请求头传递
+
+2. **API Key认证（优先级2）**
+   - 适用于Live Server等服务间调用场景
+   - 通过`X-API-Key`请求头传递
+   - 支持全局API Key和按航司API Key
+
+3. **Bearer Token静态认证（优先级3）**
+   - 简单的静态令牌验证，适用于开发和测试场景
+   - 通过`Authorization: Bearer <token>`请求头传递
+   - 支持全局Bearer Token和按航司Bearer Token
+
+- **认证上下文（AuthContext）**：认证成功后生成AuthContext对象，携带airline、user、jwt_token、auth_method等信息，贯穿整个请求生命周期
+- **速率限制**：基于slowapi库实现，默认每航司每分钟15次请求限制，防止API滥用
+- **调用方传入的token**：优化任务执行时，调用方传入的JWT token用于与Live Server通信
 
 ### 9.2 数据安全
 

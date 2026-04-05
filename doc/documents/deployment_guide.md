@@ -282,9 +282,60 @@ curl -X GET "http://localhost:8000/api/system/info" -H "Authorization: Bearer yo
 
 ### 9.1 认证配置
 
-- **修改默认token**：在配置文件中修改默认的token
-- **定期更新token**：定期更新token以提高安全性
+系统支持三种认证方式（JWT、API Key、Bearer Token），推荐在生产环境中启用JWT认证。
+
+#### 9.1.1 JWT密钥配置（与Live Server共享）
+
+JWT认证使用HS256共享密钥，必须与Live Server配置相同的密钥：
+
+```bash
+# 设置JWT共享密钥（必须与Live Server一致）
+export JWT_SECRET=your_shared_secret
+```
+
+在 `config.yaml` 中启用JWT认证：
+```yaml
+auth:
+  enabled: true
+  jwt:
+    enabled: true
+    secret: ${JWT_SECRET}  # 或直接填写密钥
+    algorithm: HS256
+```
+
+#### 9.1.2 API Key配置（Live Server服务间调用）
+
+用于Live Server向本服务发起的服务间调用：
+
+```bash
+# 设置API Key
+export ROIS_API_KEY=your_key
+```
+
+在 `config.yaml` 中启用API Key认证：
+```yaml
+auth:
+  api_key:
+    enabled: true
+    key: ${ROIS_API_KEY}  # 或直接填写Key
+```
+
+#### 9.1.3 速率限制
+
+速率限制默认启用，每航司每分钟15次请求限制：
+
+```yaml
+auth:
+  rate_limit:
+    enabled: true
+    requests_per_minute: 15
+```
+
+#### 9.1.4 安全建议
+
+- **定期轮换密钥**：定期更新JWT密钥和API Key以提高安全性
 - **限制访问**：只允许特定IP访问API接口
+- **环境变量**：生产环境中通过环境变量配置密钥，避免明文写入配置文件
 
 ### 9.2 网络安全
 

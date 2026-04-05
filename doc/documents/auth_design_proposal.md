@@ -1,7 +1,11 @@
 # 认证方案设计评审与改进提案
 
-> 日期: 2026-04-05
-> 状态: 待确认
+> 日期: 2026-04-05 (提案) | 2026-04-05 (实施完成)
+> 状态: **已实施**
+
+> [!IMPORTANT]
+> **本提案已全部实施完成。** 以下描述的改进方案已作为当前生产环境的认证机制正式上线运行。
+> 所有待确认事项均已确认并落地，JWT 认证、API Key 保留、请求限流等功能已全部就绪。
 
 ---
 
@@ -88,6 +92,9 @@
 ---
 
 ## 三、改进方案：复用 Live Server JWT
+
+> [!NOTE]
+> **本节描述的方案已实施为当前系统的认证机制。** 以下不再是提案，而是当前实现的设计文档。
 
 ### 3.1 核心思路
 
@@ -252,15 +259,15 @@ Content-Type: application/json
 
 ### 5.1 代码改动清单
 
-| 文件 | 改动内容 |
-|------|----------|
-| `requirements.txt` | 新增 `PyJWT>=2.8.0,<3.0.0` |
-| `src/config/config.py` | 新增 `JWTConfig` 配置类 |
-| `config.yaml` | 新增 `auth.jwt` 配置段 |
-| `src/config/config.yaml.example` | 同步更新 |
-| `src/api/auth.py` | 增加 JWT 解码验证逻辑（~30 行） |
-| `src/api/routes.py` | `/optimize/start` 自动从 JWT 提取 token 给 Live Server |
-| `tests/test_auth_and_errors.py` | 新增 JWT 认证测试用例 |
+| 文件 | 改动内容 | 状态 |
+|------|----------|------|
+| `requirements.txt` | 新增 `PyJWT>=2.8.0,<3.0.0` | COMPLETED |
+| `src/config/config.py` | 新增 `JWTConfig` 配置类 | COMPLETED |
+| `config.yaml` | 新增 `auth.jwt` 配置段 | COMPLETED |
+| `src/config/config.yaml.example` | 同步更新 | COMPLETED |
+| `src/api/auth.py` | 增加 JWT 解码验证逻辑（~30 行） | COMPLETED |
+| `src/api/routes.py` | `/optimize/start` 自动从 JWT 提取 token 给 Live Server | COMPLETED |
+| `tests/test_auth_and_errors.py` | 新增 JWT 认证测试用例 | COMPLETED |
 
 ### 5.2 向后兼容保证
 
@@ -281,36 +288,60 @@ Content-Type: application/json
 
 ---
 
-## 六、待确认事项
+## 六、确认事项（原待确认，已全部确认并实施）
 
-请确认以下问题后开始实施：
+以下事项已全部确认并落地实施：
 
-1. **Live Server 的 JWT 签名算法和密钥**：
+1. **Live Server 的 JWT 签名算法和密钥** -- **已确认并实施**：
    - 签名算法是 `HS256`（HMAC-SHA256）还是 `RS256`（RSA）？
    - 如果是 HS256：Optimizer Server 需要配置相同的 `secret`
    - 如果是 RS256：Optimizer Server 只需要 Live Server 的公钥
      - 使用的是：HS256
-2. **JWT Payload 结构**：
+   - **实施结果：** 已采用 HS256 算法，Optimizer Server 通过 `auth.jwt.secret` 配置项与 Live Server 共享密钥。
+
+2. **JWT Payload 结构** -- **已确认并实施**：
    - 从已有测试 Token 看到的字段有：`iss`, `exp`, `userName`
    - 是否还有 `airline` 或 `role` 等字段？
    - 如果 JWT 中没有 airline，客户端仍需通过 `X-Airline` header 或 body 传入
       - 没有airline 和role 字段，仍需通过 `X-Airline` header 或 body 传入
-3. **是否需要保留 body 中的 `token` 字段**：
+   - **实施结果：** JWT 中不包含 airline/role 字段，客户端仍须通过 `X-Airline` header 传入航司代码。
+
+3. **是否需要保留 body 中的 `token` 字段** -- **已确认并实施**：
    - JWT 模式下，Header 中的 JWT 可以直接用来调用 Live Server
    - 是否仍需要支持客户端在 body 中传一个不同的 token 给 Live Server？
    - 场景：用户用自己的 JWT 鉴权，但指定另一个服务账号的 token 调 Live Server
      - 可以使用JWT 模式，那么就不用在body中传token了，可以直接使用Header中的JWT，继续传给Live Server
+   - **实施结果：** JWT 模式下，Header 中的 JWT 自动透传给 Live Server，body 中不再需要 `token` 字段。
 
-4. **API Key 是否仍然需要**：
+4. **API Key 是否仍然需要** -- **已确认并实施**：
    - 是否有脚本/定时任务等无登录态的调用场景？
    - 如果有，API Key 保留；如果没有，可以简化为仅 JWT
      - 有，除了客户端有JWT Token字符串，Live Server本身也需要调用optimizer-server的接口，去运算Rule中的各种类型的调用，Live Server没有JWT
+   - **实施结果：** API Key 认证方式已保留，供 Live Server 服务间调用及无登录态的脚本使用。
 
-5. **请求限流需求**：
+5. **请求限流需求** -- **已确认并实施**：
    - 是否需要限流？如果需要，每分钟允许多少次请求？
    - 限流维度：按 IP？按 airline？按 user？
      - 需要限流，按 airline，每分钟大约允许 15 个请求
+   - **实施结果：** 已集成 `slowapi` 限流中间件，按 airline 维度限制每分钟 15 次请求。
 
 ---
 
-> **确认后我将开始实施。所有改动都向后兼容，不影响现有 API Key 调用方式。**
+> **所有改动均已实施完成，向后兼容，不影响现有 API Key 调用方式。**
+
+---
+
+## 七、实施总结
+
+本提案中描述的所有改进已于 2026-04-05 全部实施完成。以下为实施要点：
+
+| 功能模块 | 实施状态 | 说明 |
+|----------|----------|------|
+| JWT 认证 (HS256) | 已完成 | 复用 Live Server JWT，验证签名 + 过期时间，提取 `userName` |
+| API Key 认证保留 | 已完成 | 向后兼容，供 Live Server 及脚本调用 |
+| JWT 自动透传 Live Server | 已完成 | JWT 模式下 Header 中的 token 自动用于 Live Server 调用 |
+| 请求限流 (slowapi) | 已完成 | 按 airline 维度，15 次/分钟 |
+| 配置项更新 | 已完成 | `auth.jwt` 配置段已加入 `config.yaml` 及示例文件 |
+| 测试用例 | 已完成 | JWT 认证相关测试已加入 `tests/test_auth_and_errors.py` |
+
+本文档从提案转为实施记录，可作为当前认证架构的设计参考文档。

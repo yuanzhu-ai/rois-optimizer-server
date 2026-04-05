@@ -17,6 +17,10 @@
 | [高] 引入策略模式统一优化器处理 | 已修复 | `src/optimizers/optimizer_manager.py` |
 | [高] 消除配置默认值 280 行重复代码 | 已修复 | `src/config/config.py` |
 | [高] 锁定 requirements.txt 依赖版本 | 已修复 | `requirements.txt` |
+| [中] JWT 认证（HS256 + 共享密钥） | 已修复 | `src/api/auth.py`, `src/config/config.py`, `config.yaml` |
+| [中] 按航司请求限流（15次/分钟） | 已修复 | `main.py`, `src/config/config.py`, `config.yaml` |
+| [中] AuthContext 认证上下文 | 已修复 | `src/api/auth.py`, `src/api/routes.py` |
+| [P2] 认证增加限流和 Token 校验 | 已修复 | `src/api/auth.py`, `main.py`, `src/config/config.py`, `config.yaml` |
 
 ---
 
@@ -162,14 +166,14 @@ allow_origins=["*"]
 **位置:** `src/api/auth.py`
 
 **问题描述:**
-- 无请求频率限制（Rate Limiting），暴力破解无防护
-- Bearer Token 解析未校验格式长度就直接 split
-- 无 Token 过期和轮转机制
+- ~~无请求频率限制（Rate Limiting），暴力破解无防护~~ — **已修复：集成 slowapi，按 airline 15次/分钟**
+- Bearer Token 解析未校验格式长度就直接 split（静态 Bearer Token 模式下仍需关注）
+- ~~无 Token 过期和轮转机制~~ — **已修复：JWT 自带过期时间（exp）**
 
 **建议:**
-- 集成 `slowapi` 或类似中间件实现限流
-- Token 解析前增加格式校验
-- 考虑引入 JWT 过期验证
+- ~~集成 `slowapi` 或类似中间件实现限流~~ ✅ 已完成
+- Token 解析前增加格式校验（静态 Bearer Token 模式）
+- ~~考虑引入 JWT 过期验证~~ ✅ 已完成
 
 ---
 
@@ -317,7 +321,6 @@ pydantic
 | 9 | 统一异常处理机制 | P1 | 中 |
 | 10 | 文件操作增加并发保护 | P2 | 低 |
 | 11 | API 增加分页和参数校验 | P2 | 低 |
-| 12 | 认证增加限流和 Token 校验 | P2 | 中 |
 
 ### Phase 3 — 质量保障
 

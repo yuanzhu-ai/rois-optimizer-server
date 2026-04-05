@@ -2,29 +2,60 @@
 
 ## 1. 接口概述
 
-优化引擎调度工具提供RESTful API接口，用于管理和调度优化任务。系统支持按航司配置不同的优化器版本，默认不需要Token认证，可通过配置启用HTTP双因子认证增强安全性。
+优化引擎调度工具提供RESTful API接口，用于管理和调度优化任务。系统支持按航司配置不同的优化器版本，采用三层认证体系（JWT > API Key > Bearer Token），并支持基于航司的速率限制。
 
 ## 2. 认证方式
 
-### 2.1 优化引擎Server认证
+系统支持三种认证方式，按优先级从高到低依次为：JWT > API Key > Bearer Token（静态）。
 
-- **认证类型**：API Key认证 或 Bearer Token认证（可选）
-- **认证配置**：在`config.yaml`文件中配置
-- **说明**：优化引擎Server本身默认不需要Token认证，可通过配置启用认证增强安全性
-- **API Key认证**：
-  - 通过请求头 `X-API-Key` 传递API Key
-  - 在config.yaml中配置 `auth.api_key.key`
-- **Bearer Token认证**：
-  - 通过请求头 `Authorization: Bearer {token}` 传递Token
-  - 在config.yaml中配置 `auth.bearer_token.token`
-- **航司二字码**：必须通过请求头 `X-Airline` 传递航司二字码，用于认证校验
+### 2.1 JWT认证（推荐，最高优先级）
 
-### 2.2 Live Server认证
+- **认证类型**：JWT (HS256) 认证
+- **Token来源**：使用Live Server签发的JWT Token
+- **传递方式**：通过请求头 `Authorization: Bearer <jwt_token>` 传递
+- **验证方式**：使用与Live Server共享的密钥（`auth.jwt.secret`）验证签名
+- **用户提取**：从JWT payload中提取 `userName` 字段，作为当前操作用户
+- **Live Server通信**：JWT模式下，请求头中的JWT Token会自动传递给Live Server，请求body中的 `token` 字段为可选
+- **返回对象**：验证成功后返回 `AuthContext`，包含 airline、user、jwt_token、auth_method
 
-- **认证类型**：Bearer Token
-- **token来源**：由客户端启动优化引擎时在请求body中传入的 `token` 字段
-- **用途**：仅用于优化引擎请求各自航司的Live Server使用
-- **说明**：此token与优化引擎Server的认证token是独立的，用于与Live Server通信
+### 2.2 API Key认证（次优先级）
+
+- **认证类型**：API Key认证
+- **传递方式**：通过请求头 `X-API-Key` 传递API Key
+- **适用场景**：Live Server对优化引擎的服务间调用（无登录状态）
+- **说明**：API Key模式下没有用户登录状态，适用于系统间自动化调用
+- **返回对象**：验证成功后返回 `AuthContext`，包含 airline、auth_method
+
+### 2.3 Bearer Token认证（静态，最低优先级）
+
+- **认证类型**：Bearer Token（静态配置）
+- **传递方式**：通过请求头 `Authorization: Bearer <token>` 传递
+- **验证方式**：与config.yaml中配置的静态token比对
+- **说明**：当Authorization头中的Token不是合法JWT时，回退为静态Bearer Token验证
+- **返回对象**：验证成功后返回 `AuthContext`，包含 airline、auth_method
+
+### 2.4 认证上下文（AuthContext）
+
+认证成功后，`verify_token` 函数返回 `AuthContext` 对象，包含以下字段：
+
+| 字段 | 说明 |
+| --- | --- |
+| `airline` | 航司二字码，来自 `X-Airline` 请求头 |
+| `user` | 用户标识，JWT模式从payload提取userName，其他模式为None |
+| `jwt_token` | JWT Token字符串，仅JWT模式下有值 |
+| `auth_method` | 认证方式：`jwt`、`api_key` 或 `bearer_token` |
+
+### 2.5 速率限制
+
+- **限制规则**：每个航司（通过 `X-Airline` 请求头识别）每分钟最多15次请求
+- **超限响应**：返回HTTP状态码 `429 Too Many Requests`
+- **配置方式**：在config.yaml中通过 `auth.rate_limit` 配置
+
+### 2.6 Live Server认证
+
+- **JWT模式**：请求头中的JWT Token自动传递给Live Server，body中的 `token` 字段可选
+- **非JWT模式**：由客户端在请求body中传入 `token` 字段，用于调用Live Server
+- **说明**：Live Server的认证与优化引擎Server的认证是独立的
 
 ## 3. 接口列表
 
@@ -36,13 +67,13 @@
 - **描述**：启动一个新的优化任务
 - **请求头**：
   - `X-Airline`：航司二字码（必填），如F8、BR
-  - `X-API-Key`：优化引擎Server的API Key（可选，配置启用认证时需要）
-  - `Authorization`：Bearer Token（可选，配置启用认证时需要）
+  - `Authorization`：`Bearer <jwt_token>` JWT认证（推荐），或 `Bearer <static_token>` 静态Token认证
+  - `X-API-Key`：API Key认证（用于服务间调用）
 - **参数**：
   - `airline`：航司二字码（必填），如F8、BR
   - `url`：Live Server基础URL（必填），如 http://localhost
-  - `token`：Live Server认证Token（必填），用于调用Live Server
-  - `user`：用户ID（必填）
+  - `token`：Live Server认证Token（JWT模式下可选，非JWT模式必填），用于调用Live Server
+  - `user`：用户ID（必填，JWT模式下从token自动提取userName）
   - `type`：优化器类型（必填），如PO、RO、TO、Rule
   - `parameters`：优化参数（可选），JSON对象
 - **返回**：
@@ -52,7 +83,22 @@
     "status": "started"
   }
   ```
-- **示例请求**：
+- **示例请求（JWT认证，推荐）**：
+  ```bash
+  curl -X POST "http://localhost:8000/api/optimize/start" \
+    -H "X-Airline: F8" \
+    -H "Authorization: Bearer eyJhbGciOiJIUzI1NiIs..." \
+    -H "Content-Type: application/json" \
+    -d '{
+      "airline": "F8",
+      "url": "http://localhost",
+      "user": "0001",
+      "type": "PO",
+      "parameters": {"scenarioId": "123"}
+    }'
+  ```
+  > 注意：JWT模式下 `token` 字段可省略，系统自动使用请求头中的JWT Token与Live Server通信。
+- **示例请求（API Key认证）**：
   ```bash
   curl -X POST "http://localhost:8000/api/optimize/start" \
     -H "X-Airline: F8" \
@@ -363,8 +409,24 @@ server:
 
 # 认证配置
 auth:
-  enabled: false  # 是否启用认证
-  token: your_secret_token  # 认证token
+  enabled: true  # 是否启用认证
+  # JWT认证（最高优先级，推荐）
+  jwt:
+    enabled: true  # 是否启用JWT认证
+    secret: your_shared_jwt_secret  # 与Live Server共享的JWT密钥
+    algorithm: HS256  # JWT签名算法
+  # API Key认证（次优先级，用于服务间调用）
+  api_key:
+    enabled: true  # 是否启用API Key认证
+    key: your_api_key_here  # 全局API Key值
+  # Bearer Token认证（静态，最低优先级）
+  bearer_token:
+    enabled: true  # 是否启用Bearer Token认证
+    token: your_bearer_token_here  # 全局Bearer Token值
+  # 速率限制
+  rate_limit:
+    enabled: true  # 是否启用速率限制
+    requests_per_minute: 15  # 每航司每分钟最大请求数
 
 # 文件路径配置
 paths:
@@ -482,7 +544,7 @@ http_client:
 
 ### 5.6 安全认证配置
 
-系统支持按航司配置不同的 API Key 和 Bearer Token，增强请求安全性。
+系统采用三层认证体系（JWT > API Key > Bearer Token），并支持基于航司的速率限制。
 
 #### 5.6.1 配置文件示例
 
@@ -490,69 +552,105 @@ http_client:
 # 认证配置
 auth:
   enabled: true  # 是否启用认证
-  # API Key认证
+  # JWT认证（最高优先级）
+  jwt:
+    enabled: true
+    secret: your_shared_jwt_secret  # 与Live Server共享的JWT密钥
+    algorithm: HS256
+  # API Key认证（次优先级）
   api_key:
-    enabled: true  # 是否启用API Key认证
-    key: your_api_key_here  # 全局API Key值
-  # Bearer Token认证
+    enabled: true
+    key: your_api_key_here
+  # Bearer Token认证（最低优先级）
   bearer_token:
-    enabled: true  # 是否启用Bearer Token认证
-    token: your_bearer_token_here  # 全局Bearer Token值
-  # 航司认证配置
-  airline_auth:
-    F8:
-      api_key: f8_api_key_here  # F8航司API Key
-      bearer_token: f8_bearer_token_here  # F8航司Bearer Token
-    BR:
-      api_key: br_api_key_here  # BR航司API Key
-      bearer_token: br_bearer_token_here  # BR航司Bearer Token
+    enabled: true
+    token: your_bearer_token_here
+  # 速率限制
+  rate_limit:
+    enabled: true
+    requests_per_minute: 15  # 每航司每分钟最大请求数
 ```
 
 #### 5.6.2 认证流程
 
-1. **航司二字码**：通过请求头 `X-Airline` 传递航司二字码
-2. **API Key认证**：通过请求头 `X-API-Key` 传递API Key
-3. **Bearer Token认证**：通过请求头 `Authorization: Bearer <token>` 传递Token
-4. **认证优先级**：先检查航司特定的认证信息，再检查全局认证信息
+1. **航司二字码**：通过请求头 `X-Airline` 传递航司二字码（必填）
+2. **速率限制检查**：检查该航司是否超过每分钟15次请求限制，超限返回 `429`
+3. **JWT认证（最高优先级）**：检查 `Authorization: Bearer <token>` 头，尝试用共享密钥验证JWT签名（HS256），成功则提取 `userName`，JWT Token自动传递给Live Server
+4. **API Key认证（次优先级）**：检查 `X-API-Key` 头，与配置的API Key比对
+5. **Bearer Token认证（最低优先级）**：JWT验证失败时，将Authorization头中的Token与配置的静态Token比对
+6. **返回AuthContext**：认证成功后返回包含 airline、user、jwt_token、auth_method 的上下文对象
 
 #### 5.6.3 客户端请求示例
 
-**使用API Key认证：**
+**使用JWT认证（推荐）：**
 
 ```python
 import requests
 
+# JWT Token从Live Server登录获取
+jwt_token = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+
 headers = {
     "X-Airline": "F8",  # 航司二字码
-    "X-API-Key": "f8_api_key_here"  # 使用F8航司的API Key
+    "Authorization": f"Bearer {jwt_token}"  # Live Server签发的JWT
 }
 
+# JWT模式下token字段可省略，系统自动使用请求头中的JWT
 response = requests.post(
     "http://localhost:8000/api/optimize/start",
     json={
         "airline": "F8",
-        "optimizer_type": "PO",
+        "url": "http://localhost",
+        "user": "0001",
+        "type": "PO",
         "parameters": {"scenarioId": "123"}
     },
     headers=headers
 )
 ```
 
-**使用Bearer Token认证：**
+**使用API Key认证（服务间调用）：**
 
 ```python
 import requests
 
 headers = {
     "X-Airline": "F8",  # 航司二字码
-    "Authorization": "Bearer f8_bearer_token_here"  # 使用F8航司的Bearer Token
+    "X-API-Key": "your_api_key_here"  # API Key
 }
 
 response = requests.post(
     "http://localhost:8000/api/optimize/start",
     json={
         "airline": "F8",
-        "optimizer_type": "PO",
+        "url": "http://localhost",
+        "token": "live_server_token",  # 非JWT模式需要提供token
+        "user": "0001",
+        "type": "PO",
+        "parameters": {"scenarioId": "123"}
+    },
+    headers=headers
+)
+```
+
+**使用Bearer Token认证（静态）：**
+
+```python
+import requests
+
+headers = {
+    "X-Airline": "F8",  # 航司二字码
+    "Authorization": "Bearer your_static_bearer_token"  # 静态Token
+}
+
+response = requests.post(
+    "http://localhost:8000/api/optimize/start",
+    json={
+        "airline": "F8",
+        "url": "http://localhost",
+        "token": "live_server_token",  # 非JWT模式需要提供token
+        "user": "0001",
+        "type": "PO",
         "parameters": {"scenarioId": "123"}
     },
     headers=headers
@@ -565,8 +663,9 @@ response = requests.post(
 | --- | --- |
 | 200 | 成功 |
 | 400 | 请求参数错误 |
-| 401 | 认证失败 |
+| 401 | 认证失败（JWT无效、API Key错误、Bearer Token不匹配） |
 | 404 | 资源不存在 |
+| 429 | 请求频率超限（每航司每分钟15次） |
 | 500 | 服务器内部错误 |
 
 ## 7. 错误处理
@@ -728,14 +827,15 @@ curl -X GET "http://localhost:8000/api/tasks/all" \
 
 ## 9. 接口使用注意事项
 
-1. **认证**：优化引擎Server默认不需要Token认证，可通过配置启用HTTP双因子认证
-2. **航司二字码**：必须通过请求头 `X-Airline` 传递航司二字码，用于认证校验和航司隔离
-3. **优化器类型**：支持的优化器类型包括PO、RO、TO、Rule
-4. **任务状态**：任务状态包括pending、running、completed、failed、stopped
-5. **并发限制**：系统有最大并发任务数限制，请合理安排任务
-6. **错误处理**：请妥善处理API返回的错误信息
-7. **航司隔离**：不同航司的任务和优化器是相互隔离的
-8. **Live Server认证**：请求Live Server时需要携带客户端传入的token字符串
+1. **认证**：推荐使用JWT认证（与Live Server共享密钥），系统支持三层认证体系：JWT > API Key > Bearer Token
+2. **航司二字码**：必须通过请求头 `X-Airline` 传递航司二字码，用于认证校验、航司隔离和速率限制
+3. **速率限制**：每个航司每分钟最多15次请求，超限返回429状态码
+4. **优化器类型**：支持的优化器类型包括PO、RO、TO、Rule
+5. **任务状态**：任务状态包括pending、running、completed、failed、stopped
+6. **并发限制**：系统有最大并发任务数限制，请合理安排任务
+7. **错误处理**：请妥善处理API返回的错误信息
+8. **航司隔离**：不同航司的任务和优化器是相互隔离的
+9. **Live Server认证**：JWT模式下Token自动从请求头传递给Live Server；非JWT模式需要在body中传入token字段
 
 ## 10. 接口版本管理
 
@@ -753,7 +853,18 @@ curl -X GET "http://localhost:8000/api/tasks/all" \
 
 ## 12. 测试状态
 
-### 12.1 功能测试进度
+### 12.1 自动化测试
+
+全部 **105项测试** 已通过（92项原有测试 + 12项JWT认证测试 + 1项新增认证测试）。
+
+| 测试类别 | 数量 | 状态 |
+|----------|------|------|
+| 原有功能测试 | 92 | ✅ 全部通过 |
+| JWT认证测试 | 12 | ✅ 全部通过 |
+| 新增认证测试 | 1 | ✅ 全部通过 |
+| **合计** | **105** | **✅ 全部通过** |
+
+### 12.2 功能测试进度
 
 | 优化器 | 类型 | Input测试 | Output测试 | 状态说明 |
 |--------|------|-----------|------------|----------|
@@ -768,7 +879,7 @@ curl -X GET "http://localhost:8000/api/tasks/all" \
 - ⏳ 待测试：功能已实现，待后续测试验证
 - ❌ 失败：测试未通过，需要修复
 
-### 12.2 已验证功能
+### 12.3 已验证功能
 
 1. **工作目录命名规则**
    - PO/RO/TO: `{type}_{scenarioId}_{timestamp}_{taskId}`
@@ -782,12 +893,18 @@ curl -X GET "http://localhost:8000/api/tasks/all" \
    - PO/RO/TO: 纯整数 `scenarioId`
    - Rule: JSON对象（包含category等参数）
 
-4. **认证逻辑**
-   - Header中的API Key: optimize-server自身认证
-   - Body中的token: 调用Live Server时使用
+4. **认证逻辑（三层体系）**
+   - JWT认证（最高优先级）：使用Live Server共享密钥验证，自动提取userName，JWT自动传递给Live Server
+   - API Key认证（次优先级）：用于Live Server服务间调用，无登录状态
+   - Bearer Token认证（最低优先级）：静态Token比对
+   - 返回AuthContext对象（含airline、user、jwt_token、auth_method）
 
-5. **超时配置**
-   - 默认10分钟（600秒）
+5. **速率限制**
+   - 每航司每分钟15次请求限制
+   - 超限返回429状态码
+
+6. **超时配置**
+   - 默认20分钟（1200秒）
    - 可在config.yaml中调整
 
 ## 13. 总结
