@@ -19,10 +19,18 @@ uvicorn main:app --host 0.0.0.0 --port 8000
 # 测试（105 个）
 python3 -m pytest tests/test_input_interface.py tests/test_output_interface.py tests/test_auth_and_errors.py tests/test_file_management.py tests/test_e2e_lifecycle.py tests/test_jwt_auth.py -v
 
-# 构建可执行文件
+# 构建可执行文件（PyInstaller onefile，产物 dist/optimize_server）
 ./build.sh        # Linux
-build.bat          # Windows
+build.bat         # Windows
+
+# 一键打发布包（先 build.sh 编译，再把二进制+配置示例+运行时 deploy.sh
+# 打成 dist-pack/rois-optimizer-server.tar.gz，无源码）
+./deploy.sh pack
 ```
+
+> 客户机部署只需 tar.gz：解压后 `cp config.yaml.example config.yaml && vi config.yaml`，
+> 然后 `./deploy.sh install && ./deploy.sh start`，不需要 Python/pip/venv。
+> 详见 doc/documents/deployment_guide.md。
 
 ## 项目结构
 

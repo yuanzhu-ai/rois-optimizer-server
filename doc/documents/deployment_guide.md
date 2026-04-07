@@ -92,33 +92,107 @@ chmod +x start.sh
 uvicorn main:app --host 0.0.0.0 --port 8000
 ```
 
-### 3.2 可执行文件部署（推荐）
+### 3.2 可执行文件部署（推荐，无源码）
 
-#### 3.2.1 Windows 可执行文件
+发布包 `rois-optimizer-server.tar.gz` 内容：
 
-1. **下载可执行文件**
-   - 从构建服务器或发布渠道获取 `optimize_server.exe` 文件
+| 文件 | 说明 |
+|---|---|
+| `optimize_server` | PyInstaller onefile 可执行文件，约 17 MB |
+| `config.yaml.example` | 配置示例，需复制为 `config.yaml` 并按实际环境修改 |
+| `deploy.sh` | 运行时管理脚本（install / start / stop / restart / status） |
 
-2. **运行可执行文件**
-   - 直接双击 `optimize_server.exe` 文件启动服务
-   - 或在命令提示符中运行：`optimize_server.exe`
+> 包内不含任何 `.py` 源码。客户机不需要安装 Python / pip / venv，
+> 只需 glibc 版本与构建机相同或更新。
 
-#### 3.2.2 Linux 可执行文件
+#### 3.2.1 部署步骤（Linux）
 
-1. **下载可执行文件**
-   - 从构建服务器或发布渠道获取 `optimize_server` 文件
+```bash
+# 1) 上传发布包到目标机器（DEPLOY_DIR 替换为实际部署目录）
+scp dist-pack/rois-optimizer-server.tar.gz user@server:<DEPLOY_DIR>/
 
-2. **设置执行权限**
-   - 打开终端
-   - 进入可执行文件目录
-   - 设置执行权限：`chmod +x optimize_server`
+# 2) 在目标机器上解压并初始化
+ssh user@server
+cd <DEPLOY_DIR>
+tar xzf rois-optimizer-server.tar.gz
+cd rois-optimizer-server
 
-3. **运行可执行文件**
-   - 直接运行：`./optimize_server`
+# 3) 准备配置（首次必须执行）
+cp config.yaml.example config.yaml
+vi config.yaml                       # 改成实际的 host/port/优化器路径等
+
+# 4) 设置环境变量（密钥不写进 config.yaml，写到 .env 里）
+cat > .env <<'EOF'
+JWT_SECRET=与Live Server共享的密钥
+ROIS_API_KEY=API密钥
+EOF
+
+# 5) 安装并启动
+./deploy.sh install                  # 创建 workspace/finished/archive/temp/logs
+./deploy.sh start                    # 后台启动二进制
+./deploy.sh status                   # 查看状态
+curl http://localhost:8000/health
+```
+
+#### 3.2.2 配置文件查找顺序
+
+`optimize_server` 启动时按以下顺序查找 `config.yaml`：
+
+1. 环境变量 `ROIS_CONFIG_PATH` 指定的路径（运行时 `deploy.sh` 自动设为 `<部署目录>/config.yaml`）
+2. 可执行文件所在目录的 `config.yaml`
+3. 找不到则使用内置的 `config.yaml.example` 作为兜底
+
+这意味着 **`config.yaml` 在二进制外部独立存在**，修改配置不需要重新打包，重启服务即可生效。
+
+#### 3.2.3 Windows 可执行文件
+
+Windows 平台的打包目前仍走 `build.bat` 单步流程：构建产物 `dist/optimize_server.exe`，
+直接双击或 `optimize_server.exe` 运行；目前 `deploy.sh pack` 的发布包流程仅覆盖 Linux。
 
 ## 4. 编译打包
 
-### 4.1 Windows 编译
+### 4.1 Linux 一键打包（推荐）
+
+在开发/构建机上一条命令完成「编译可执行文件 + 打发布 tar.gz」：
+
+```bash
+./deploy.sh pack
+```
+
+内部流程：
+
+1. 调用 `build.sh`：创建独立的 `build-venv/` → 安装 `requirements.txt` 与 `pyinstaller`
+   → 生成 `git.properties` → 执行 `pyinstaller optimize_server.spec`
+   → 产物为 `dist/optimize_server`（onefile，约 17 MB）
+2. 把 `dist/optimize_server` + `config.yaml.example` + `dist-pack/deploy.sh`（运行时脚本）
+   打成 `dist-pack/rois-optimizer-server.tar.gz`
+
+也可以只构建二进制不打包：
+
+```bash
+./build.sh
+./dist/optimize_server     # 直接运行做冒烟测试
+```
+
+#### 4.1.1 系统要求（构建机）
+
+- Linux x86_64
+- Python 3.8+，且已安装 `python3-venv`
+  （Debian/Ubuntu 上若 `python3 -m venv` 失败，执行 `sudo apt install python3.12-venv`）
+
+#### 4.1.2 ⚠ 平台兼容性（重要）
+
+PyInstaller 打出来的二进制是**平台相关**的，部署到客户机必须满足：
+
+- **CPU 架构相同**（x86_64 ↔ x86_64，aarch64 ↔ aarch64）
+- **构建机的 glibc 版本 ≤ 客户机的 glibc 版本**
+  （否则客户机运行时会报 `GLIBC_2.XX not found`）
+
+最稳妥的做法：**直接在客户机本地或在与客户机同 OS/同版本的 Docker 容器内构建**。
+当前生产环境 `pr-server-01` 是 Ubuntu 24.04.1 LTS（glibc 2.39），
+所以在任意 Ubuntu 24.04 / glibc ≤ 2.39 的机器上构建均可。
+
+### 4.2 Windows 编译
 
 1. **安装依赖**
    - 打开命令提示符（CMD）
@@ -135,39 +209,22 @@ uvicorn main:app --host 0.0.0.0 --port 8000
 4. **获取可执行文件**
    - 可执行文件位于 `dist` 目录中：`dist/optimize_server.exe`
 
-### 4.2 Linux 编译
+> Windows 暂未集成 `deploy.sh pack` 一键流程，需手动执行上述步骤。
 
-1. **安装依赖**
-   - 打开终端
-   - 进入项目目录：`cd optimize-server`
-   - 安装依赖：`pip3 install -r requirements.txt`
-   - 安装 PyInstaller：`pip3 install pyinstaller`
+### 4.3 使用 Docker 在低版本 glibc 环境构建
 
-2. **生成版本信息**
-   - 运行：`python3 generate_git_properties.py`
-
-3. **打包项目**
-   - 运行：`pyinstaller optimize_server.spec`
-
-4. **获取可执行文件**
-   - 可执行文件位于 `dist` 目录中：`dist/optimize_server`
-
-### 4.3 使用 Docker 跨平台编译
-
-如果没有 Linux 环境，可以使用 Docker 来模拟 Linux 环境进行打包：
+如果本机 glibc 比目标客户机更新，导致直接构建出来的二进制无法运行，
+用一个旧版 Ubuntu 镜像构建即可：
 
 ```bash
-# 拉取 Python 镜像
-docker pull python:3.10-slim
-
-# 运行 Docker 容器并执行打包命令
-docker run --rm -v $(pwd):/app -w /app python:3.10-slim bash -c "
-    pip install pyinstaller
-    pip install -r requirements.txt
-    python generate_git_properties.py
-    pyinstaller optimize_server.spec
+# 例：目标机是 Ubuntu 22.04 (glibc 2.35)
+docker run --rm -v $(pwd):/app -w /app ubuntu:22.04 bash -c "
+    apt update && apt install -y python3 python3-venv python3-pip git
+    ./deploy.sh pack
 "
 ```
+
+完成后 `dist-pack/rois-optimizer-server.tar.gz` 会带着低版本 glibc 兼容的二进制。
 
 ## 5. 验证服务
 
