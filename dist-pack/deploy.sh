@@ -57,10 +57,14 @@ install() {
     PYTHON_VER=$(python3 -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')
     echo "    Python 版本: $PYTHON_VER"
 
-    # 创建虚拟环境
-    if [ ! -d "venv" ]; then
+    # 创建虚拟环境（检查 activate 文件，避免空壳目录）
+    if [ ! -f "venv/bin/activate" ]; then
         echo "==> 创建虚拟环境..."
-        python3 -m venv venv
+        rm -rf venv
+        if ! python3 -m venv venv; then
+            echo "错误：venv 创建失败。Debian/Ubuntu 请安装：sudo apt-get install python3-venv（或 python${PYTHON_VER}-venv）"
+            exit 1
+        fi
     fi
     source venv/bin/activate
 
