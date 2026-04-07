@@ -1,5 +1,6 @@
 import os
 import re
+import sys
 import yaml
 from pydantic_settings import BaseSettings
 from typing import Dict, Any, Optional
@@ -168,12 +169,22 @@ class ConfigManager:
         return data
 
     def load_config(self, config_path: str = None):
-        """加载配置文件"""
+        """加载配置文件
+
+        查找顺序：
+          1. 显式参数
+          2. 环境变量 ROIS_CONFIG_PATH
+          3. 冻结模式（PyInstaller）：可执行文件所在目录的 config.yaml
+             非冻结模式：src/config/config.yaml（开发模式默认）
+        """
         if config_path is None:
-            # 默认配置文件路径
-            config_path = os.path.join(
-                os.path.dirname(__file__), "config.yaml"
-            )
+            config_path = os.environ.get("ROIS_CONFIG_PATH")
+        if config_path is None:
+            if getattr(sys, "frozen", False):
+                base = os.path.dirname(os.path.abspath(sys.executable))
+            else:
+                base = os.path.dirname(__file__)
+            config_path = os.path.join(base, "config.yaml")
 
         if not os.path.exists(config_path):
             # 如果配置文件不存在，使用默认配置

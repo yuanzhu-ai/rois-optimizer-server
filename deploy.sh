@@ -12,35 +12,68 @@ APP_DIR="$(cd "$(dirname "$0")" && pwd)"
 SERVICE_PORT=8000
 
 # ============ 打包 ============
+# 先调 build.sh 用 PyInstaller 编译出可执行文件，再把
+# 二进制 + 配置示例 + 运行时 deploy.sh 打成 tar.gz。
+# 发布包不包含任何 Python 源码。
 pack() {
-    echo "==> 打包部署文件..."
     cd "$APP_DIR"
 
+    echo "==> 步骤 1/2：编译可执行文件..."
+    if [ ! -f "build.sh" ]; then
+        echo "错误：未找到 build.sh"
+        exit 1
+    fi
+    bash build.sh
+
+    if [ ! -f "dist/optimize_server" ]; then
+        echo "错误：dist/optimize_server 不存在，构建失败"
+        exit 1
+    fi
+
+    echo "==> 步骤 2/2：打包发布产物..."
     PACK_DIR=$(mktemp -d)
     TARGET="$PACK_DIR/$APP_NAME"
     mkdir -p "$TARGET"
 
-    # 复制必要文件
-    cp main.py start.sh deploy.sh requirements.txt "$TARGET/"
-    cp -r src "$TARGET/"
-    cp config.yaml "$TARGET/config.yaml"
+    # 二进制
+    cp dist/optimize_server "$TARGET/optimize_server"
+    chmod +x "$TARGET/optimize_server"
 
-    # 清理 __pycache__
-    find "$TARGET" -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
+    # 配置示例（不含真实密钥/路径，由客户端复制为 config.yaml 后自行修改）
+    if [ -f "src/config/config.yaml.example" ]; then
+        cp src/config/config.yaml.example "$TARGET/config.yaml.example"
+    elif [ -f "config.yaml" ]; then
+        cp config.yaml "$TARGET/config.yaml.example"
+    fi
+
+    # 运行时 deploy.sh（来自 dist-pack/，已是二进制运行模式，不含 venv/pip 逻辑）
+    if [ ! -f "dist-pack/deploy.sh" ]; then
+        echo "错误：未找到 dist-pack/deploy.sh"
+        exit 1
+    fi
+    cp dist-pack/deploy.sh "$TARGET/deploy.sh"
+    chmod +x "$TARGET/deploy.sh"
 
     # 打包
-    TARBALL="$APP_DIR/$APP_NAME.tar.gz"
+    TARBALL="$APP_DIR/dist-pack/$APP_NAME.tar.gz"
+    mkdir -p "$APP_DIR/dist-pack"
     tar czf "$TARBALL" -C "$PACK_DIR" "$APP_NAME"
     rm -rf "$PACK_DIR"
 
     SIZE=$(du -h "$TARBALL" | cut -f1)
     echo "==> 打包完成：$TARBALL ($SIZE)"
     echo ""
-    echo "下一步："
-    echo "  scp $TARBALL user@目标服务器:/opt/"
-    echo "  ssh user@目标服务器"
-    echo "  cd /opt && tar xzf $APP_NAME.tar.gz && cd $APP_NAME"
-    echo "  ./deploy.sh install"
+    echo "发布包内容（无源码）："
+    echo "  optimize_server         单文件可执行（PyInstaller onefile）"
+    echo "  config.yaml.example     配置示例"
+    echo "  deploy.sh               运行时管理脚本（install/start/stop/restart/status）"
+    echo ""
+    echo "下一步（DEPLOY_DIR 替换为客户机部署目录）："
+    echo "  scp $TARBALL user@客户机:<DEPLOY_DIR>/"
+    echo "  ssh user@客户机"
+    echo "  cd <DEPLOY_DIR> && tar xzf $APP_NAME.tar.gz && cd $APP_NAME"
+    echo "  cp config.yaml.example config.yaml && vi config.yaml"
+    echo "  ./deploy.sh install && ./deploy.sh start"
 }
 
 # ============ 安装 ============

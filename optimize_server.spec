@@ -1,27 +1,39 @@
 # -*- mode: python ; coding: utf-8 -*-
+import os
+from PyInstaller.utils.hooks import collect_submodules
 
 block_cipher = None
+
+# 收集动态导入子模块（FastAPI/uvicorn 体系大量使用动态 import）
+hiddenimports = []
+for pkg in [
+    'uvicorn',
+    'fastapi',
+    'starlette',
+    'pydantic',
+    'pydantic_settings',
+    'slowapi',
+    'jwt',
+    'src',
+]:
+    try:
+        hiddenimports += collect_submodules(pkg)
+    except Exception:
+        pass
+
+# 数据文件：保留 config.yaml.example 作为 fallback；git.properties 可能未生成
+datas = [
+    ('src/config/config.yaml.example', 'src/config'),
+]
+if os.path.exists('git.properties'):
+    datas.append(('git.properties', '.'))
 
 a = Analysis(
     ['main.py'],
     pathex=[],
     binaries=[],
-    datas=[
-        ('git.properties', '.'),
-        ('src/config/config.yaml.example', 'src/config'),
-    ],
-    hiddenimports=[
-        'uvicorn',
-        'fastapi',
-        'pydantic',
-        'pydantic_settings',
-        'yaml',
-        'logging',
-        'os',
-        'sys',
-        'datetime',
-        'subprocess',
-    ],
+    datas=datas,
+    hiddenimports=hiddenimports,
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
@@ -41,7 +53,7 @@ exe = EXE(
     a.datas,
     [],
     name='optimize_server',
-    debug=True,
+    debug=False,
     bootloader_ignore_signals=False,
     strip=False,
     upx=False,
