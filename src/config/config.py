@@ -186,11 +186,16 @@ class ConfigManager:
                 base = os.path.dirname(__file__)
             config_path = os.path.join(base, "config.yaml")
 
+        import logging
+        _logger = logging.getLogger(__name__)
+
         if not os.path.exists(config_path):
             # 如果配置文件不存在，使用默认配置
+            _logger.warning("配置文件不存在: %s，将回退到内置默认配置（config.yaml.example）", config_path)
             self._config = self._create_default_config()
             return self._config
 
+        _logger.info("加载配置文件: %s", config_path)
         with open(config_path, "r", encoding="utf-8") as f:
             config_data = yaml.safe_load(f)
 
