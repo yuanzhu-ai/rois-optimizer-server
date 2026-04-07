@@ -2,14 +2,34 @@
 HTTP客户端模块，用于与Live Server通信
 """
 import logging
+import ssl
 import requests
 import gzip
 import io
 from typing import Dict, Optional, Any
 from urllib.parse import urljoin
+from requests.adapters import HTTPAdapter
 from src.config.config import config_manager
 
 logger = logging.getLogger(__name__)
+
+
+class _LegacySSLAdapter(HTTPAdapter):
+    """允许弱密钥/SHA1 证书的 HTTPS 适配器（用于老旧测试服）。
+
+    OpenSSL 3.0 默认 security level 是 2，会拒绝 1024-bit RSA、SHA1
+    签名等老证书，报 'EE certificate key too weak'。本适配器把 level
+    降到 1，但保留 CA 链、有效期、hostname 等正常校验。
+    """
+
+    def init_poolmanager(self, *args, **kwargs):
+        ctx = ssl.create_default_context()
+        try:
+            ctx.set_ciphers("DEFAULT@SECLEVEL=1")
+        except ssl.SSLError as e:
+            logger.warning("设置 SECLEVEL=1 失败: %s", e)
+        kwargs["ssl_context"] = ctx
+        return super().init_poolmanager(*args, **kwargs)
 
 
 class LiveServerClient:
@@ -26,13 +46,30 @@ class LiveServerClient:
             注：input.gz生成可能需要1-3分钟，所以设置较长的超时时间
         """
         # 如果没有指定超时时间，从配置中读取
+        http_cfg = config_manager.get_config().http_client
         if timeout is None:
-            timeout = config_manager.get_config().http_client.timeout
+            timeout = http_cfg.timeout
         self.base_url = base_url.rstrip('/')
         self.token = token
         self.timeout = timeout
+        self.verify = http_cfg.ssl_verify
         self.session = requests.Session()
-        
+
+        # 测试环境兼容：允许弱密钥/SHA1 证书的老服务器
+        if http_cfg.legacy_ssl:
+            adapter = _LegacySSLAdapter()
+            self.session.mount("https://", adapter)
+            logger.warning("HTTP 客户端已启用 legacy_ssl（OpenSSL SECLEVEL=1），仅供测试环境")
+
+        if not self.verify:
+            logger.warning("HTTP 客户端已禁用 SSL 证书校验（ssl_verify=false），仅供测试环境")
+            # 关闭 urllib3 的不安全请求警告刷屏
+            try:
+                import urllib3
+                urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+            except Exception:
+                pass
+
         # 设置默认请求头
         self.session.headers.update({
             'Authorization': f'Bearer {token}',
@@ -98,7 +135,8 @@ class LiveServerClient:
                     url,
                     json=request_data,
                     headers=headers,
-                    timeout=self.timeout
+                    timeout=self.timeout,
+                    verify=self.verify
                 )
             elif isinstance(request_data, int):
                 # 整数类型直接作为原始body发送
@@ -107,7 +145,8 @@ class LiveServerClient:
                     url,
                     data=str(request_data),
                     headers=headers,
-                    timeout=self.timeout
+                    timeout=self.timeout,
+                    verify=self.verify
                 )
             else:
                 # 其他类型使用data参数
@@ -115,7 +154,8 @@ class LiveServerClient:
                     url,
                     data=request_data,
                     headers=headers,
-                    timeout=self.timeout
+                    timeout=self.timeout,
+                    verify=self.verify
                 )
             response.raise_for_status()
             

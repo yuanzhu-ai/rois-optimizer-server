@@ -188,6 +188,14 @@ http_client:
   # 注：input.gz生成可能需要1-3分钟，建议设置20分钟（1200秒）
   timeout: 1200
 
+  # 兼容老旧测试服 TLS（仅测试环境用，生产保持 false）
+  # true 时把 OpenSSL 安全等级降到 1，允许 1024-bit RSA、SHA1 签名等弱证书。
+  # 现象：报 "EE certificate key too weak" 时启用此项。
+  legacy_ssl: false
+
+  # 是否校验 Live Server 的 SSL 证书（自签名/测试环境可临时关闭，生产保持 true）
+  ssl_verify: true
+
 # 文件管理配置
 file_management:
   archive_days: 1  # 隔天归档

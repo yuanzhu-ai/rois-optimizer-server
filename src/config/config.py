@@ -127,6 +127,8 @@ class TasksConfig(BaseSettings):
 
 class HttpClientConfig(BaseSettings):
     timeout: int = 600  # Live Server请求超时时间（秒），默认10分钟
+    legacy_ssl: bool = False  # true=降低 OpenSSL 安全等级到 1，允许弱密钥/SHA1 证书（仅测试环境）
+    ssl_verify: bool = True   # false=完全跳过证书校验（自签名/测试场景；生产禁用）
 
 
 class Config(BaseSettings):
