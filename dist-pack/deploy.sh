@@ -2,8 +2,10 @@
 # ROIS Optimizer Server 部署脚本
 # 用法：
 #   1. 在开发机打包：  ./deploy.sh pack
-#   2. 传到目标服务器： scp rois-optimizer-server.tar.gz user@server:/opt/
+#   2. 传到目标服务器： scp rois-optimizer-server.tar.gz user@server:<部署目录>/
 #   3. 在目标服务器：   tar xzf rois-optimizer-server.tar.gz && cd rois-optimizer-server && ./deploy.sh install
+#
+# 注：部署目录任意，脚本以自身所在目录为工作目录（APP_DIR）。
 
 set -e
 
@@ -36,10 +38,10 @@ pack() {
     SIZE=$(du -h "$TARBALL" | cut -f1)
     echo "==> 打包完成：$TARBALL ($SIZE)"
     echo ""
-    echo "下一步："
-    echo "  scp $TARBALL user@目标服务器:/opt/"
+    echo "下一步（DEPLOY_DIR 替换为目标服务器上的部署目录，如 /data/optimizer-server/f8）："
+    echo "  scp $TARBALL user@目标服务器:<DEPLOY_DIR>/"
     echo "  ssh user@目标服务器"
-    echo "  cd /opt && tar xzf $APP_NAME.tar.gz && cd $APP_NAME"
+    echo "  cd <DEPLOY_DIR> && tar xzf $APP_NAME.tar.gz && cd $APP_NAME"
     echo "  ./deploy.sh install"
 }
 
