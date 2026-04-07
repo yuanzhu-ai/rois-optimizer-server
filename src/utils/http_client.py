@@ -19,8 +19,13 @@ class _LegacySSLAdapter(HTTPAdapter):
 
     OpenSSL 3.0 默认 security level 是 2，会拒绝 1024-bit RSA、SHA1
     签名等老证书，报 'EE certificate key too weak'。本适配器把 level
-    降到 1，但保留 CA 链、有效期、hostname 等正常校验。
+    降到 1。如果 verify=False 同时启用，还会关闭 hostname / 证书校验
+    （否则与 urllib3 的 verify_mode=CERT_NONE 冲突）。
     """
+
+    def __init__(self, verify: bool = True, *args, **kwargs):
+        self._verify = verify
+        super().__init__(*args, **kwargs)
 
     def init_poolmanager(self, *args, **kwargs):
         ctx = ssl.create_default_context()
@@ -28,6 +33,11 @@ class _LegacySSLAdapter(HTTPAdapter):
             ctx.set_ciphers("DEFAULT@SECLEVEL=1")
         except ssl.SSLError as e:
             logger.warning("设置 SECLEVEL=1 失败: %s", e)
+        if not self._verify:
+            # 必须先关闭 check_hostname，再把 verify_mode 设成 CERT_NONE，
+            # 否则 OpenSSL 会拒绝这个组合
+            ctx.check_hostname = False
+            ctx.verify_mode = ssl.CERT_NONE
         kwargs["ssl_context"] = ctx
         return super().init_poolmanager(*args, **kwargs)
 
@@ -57,7 +67,7 @@ class LiveServerClient:
 
         # 测试环境兼容：允许弱密钥/SHA1 证书的老服务器
         if http_cfg.legacy_ssl:
-            adapter = _LegacySSLAdapter()
+            adapter = _LegacySSLAdapter(verify=self.verify)
             self.session.mount("https://", adapter)
             logger.warning("HTTP 客户端已启用 legacy_ssl（OpenSSL SECLEVEL=1），仅供测试环境")
 
