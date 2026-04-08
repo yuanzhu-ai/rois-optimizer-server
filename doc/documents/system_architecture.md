@@ -31,7 +31,6 @@ optimize-server/
 ├── src/
 │   ├── api/             # API接口模块
 │   │   ├── auth.py      # 认证中间件
-│   │   ├── integration.py # 接口集成
 │   │   └── routes.py    # API路由
 │   ├── config/          # 配置管理模块
 │   │   ├── config.py    # 配置管理
@@ -86,9 +85,14 @@ optimize-server/
 - **事件通知**：支持任务事件的发布和订阅
 
 #### 2.3.5 文件管理模块
-- **功能**：管理优化过程中产生的文件，包括移动、压缩和清理
+- **功能**：管理优化过程中产生的文件，包括移动、归档和清理
 - **核心类**：`FileManager`
-- **航司支持**：每个航司有独立的文件目录
+- **任务目录搬运**：`move_to_finished` 将整个任务工作目录（保留子目录结构）搬运至
+  `finished/<airline>/<task_dir>`，支持 `suffix` 参数（如 `_failed`、`_stop`）
+- **航司隔离归档**：`archive_files` 按 `archive/<airline>/<date>/` 组织归档；任务子目录
+  打包为 `<task>.tar.gz` 保留内部结构，散文件单独 gzip
+- **冲突处理**：目标命名冲突时追加时间戳 + 短 UUID，避免覆盖
+- **遗留兼容**：`finished/` 顶层散文件落入 `archive/_legacy/<date>/` 不丢失
 
 #### 2.3.6 API接口模块
 - **功能**：提供RESTful API接口，处理HTTP请求
@@ -100,16 +104,16 @@ optimize-server/
 - **路由**：优化任务管理接口和系统管理接口
 - **航司支持**：所有接口都支持传入airline参数
 
-#### 2.3.7 接口集成模块
-- **功能**：与现有系统接口集成，获取input.gz文件和回传output.gz文件
-- **核心类**：`InterfaceIntegration`
-- **动态配置**：支持调用方传入URL和token
-
-#### 2.3.8 HTTP客户端模块
-- **功能**：与Live Server进行HTTP通信，获取input.gz和回传output.gz
+#### 2.3.7 HTTP客户端模块
+- **功能**：与 Live Server 进行 HTTP 通信，统一承担获取 input.gz 与回传 output.gz 的职责
 - **核心类**：`LiveServerClient`, `create_live_server_client`
-- **可配置超时**：支持通过config.yaml配置请求超时时间（默认1200秒=20分钟）
-- **请求格式**：根据优化器类型自动选择请求数据格式（PO/RO/TO发送纯整数，Rule发送JSON对象）
+- **统一入口**：内部通过私有 `_post` 辅助集中处理 URL 构建、请求头、`timeout`、`verify`、
+  legacy_ssl adapter 与异常包装；`get_input_data` / `submit_output_data` 均为其薄封装，
+  确保所有对 Live Server 的请求行为一致
+- **可配置超时**：支持通过 config.yaml 配置请求超时时间（默认 1200 秒 = 20 分钟）
+- **TLS 兼容**：支持 `legacy_ssl`（OpenSSL SECLEVEL=1，兼容弱密钥/SHA1 证书）与
+  `ssl_verify=false`（跳过自签名证书校验），两项配置对 input/output 两条链路生效
+- **请求格式**：根据优化器类型自动选择请求数据格式（PO/RO/TO 发送纯整数，Rule 发送 JSON 对象）
 
 ## 3. 数据流
 
@@ -378,13 +382,15 @@ redis:
 
 ### 6.2 目录结构
 
-每个航司有独立的目录结构：
+优化器二进制按航司隔离，运行时产物按航司分桶：
 
 ```
 {airline}/
-├── optimizers/    # 优化器可执行文件
-├── finished/      # 完成的优化结果
-└── archive/       # 归档文件
+└── optimizers/        # 优化器可执行文件（按航司隔离）
+
+finished/<airline>/<task_dir>/   # 任务完成后整体搬运的工作目录（保留子目录）
+archive/<airline>/<date>/        # 按日归档：任务目录打包为 <task>.tar.gz，散文件单独 .gz
+archive/_legacy/<date>/          # 兼容遗留 finished 顶层散文件的归档落点
 ```
 
 ### 6.3 任务集成模式

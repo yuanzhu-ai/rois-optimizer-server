@@ -109,110 +109,81 @@ class LiveServerClient:
         full_url = f"{self.base_url}{path}"
         return full_url
     
-    def get_input_data(self, airline: str, url_path: str, 
+    def _post(self, airline: str, url_path: str, *,
+              body: Any = None,
+              content_type: str = 'application/json',
+              extra_headers: Optional[Dict[str, str]] = None,
+              error_prefix: str = "HTTP 请求失败") -> requests.Response:
+        """统一的 POST 请求入口，集中处理 URL 构建、请求头、TLS 设置、超时、异常包装
+
+        Args:
+            airline: 航司二字码（保留参数，由 _build_url 消费）
+            url_path: API 路径
+            body: 请求体。dict -> json 发送；int -> str(int) 作为原始 body；
+                  bytes/str/None -> data 参数
+            content_type: Content-Type 头，默认 application/json
+            extra_headers: 额外请求头，会覆盖默认值
+            error_prefix: 异常消息前缀，便于定位调用点
+
+        Returns:
+            requests.Response（已 raise_for_status）
+        """
+        url = self._build_url(airline, url_path)
+
+        headers = {
+            'Content-Type': content_type,
+            'Flag': 'Rule',
+        }
+        if extra_headers:
+            headers.update(extra_headers)
+
+        kwargs: Dict[str, Any] = {
+            'headers': headers,
+            'timeout': self.timeout,
+            'verify': self.verify,
+        }
+        if isinstance(body, dict):
+            kwargs['json'] = body
+        elif isinstance(body, int):
+            kwargs['data'] = str(body)
+        else:
+            # bytes / str / None 走 data 参数
+            kwargs['data'] = body
+
+        try:
+            response = self.session.post(url, **kwargs)
+            response.raise_for_status()
+            return response
+        except requests.exceptions.RequestException as e:
+            raise Exception(f"{error_prefix}: {str(e)}")
+
+    def get_input_data(self, airline: str, url_path: str,
                        data: Optional[Any] = None,
                        extra_headers: Optional[Dict[str, str]] = None) -> bytes:
-        """
-        从Live Server获取输入数据
-        
-        Args:
-            airline: 航司二字码
-            url_path: 输入URL路径（如：/api/orengine/po/comptxt）
-            data: 请求数据（可选，支持字符串或字典）
-            extra_headers: 额外的请求头
-            
-        Returns:
-            输入数据（gzip压缩的字节）
-        """
-        url = self._build_url(airline, url_path)
-        
-        # 设置请求头
-        headers = {
-            'Content-Type': 'application/json',
-            'Flag': 'Rule'
-        }
-        if extra_headers:
-            headers.update(extra_headers)
-        
-        # 准备请求体
-        request_data = data
-        
-        try:
-            # 根据数据类型选择发送方式
-            if isinstance(request_data, dict):
-                # 字典类型使用json参数
-                response = self.session.post(
-                    url,
-                    json=request_data,
-                    headers=headers,
-                    timeout=self.timeout,
-                    verify=self.verify
-                )
-            elif isinstance(request_data, int):
-                # 整数类型直接作为原始body发送
-                headers['Content-Type'] = 'application/json'
-                response = self.session.post(
-                    url,
-                    data=str(request_data),
-                    headers=headers,
-                    timeout=self.timeout,
-                    verify=self.verify
-                )
-            else:
-                # 其他类型使用data参数
-                response = self.session.post(
-                    url,
-                    data=request_data,
-                    headers=headers,
-                    timeout=self.timeout,
-                    verify=self.verify
-                )
-            response.raise_for_status()
-            
-            # 返回响应内容（可能是gzip压缩的）
-            return response.content
-            
-        except requests.exceptions.RequestException as e:
-            raise Exception(f"获取输入数据失败: {str(e)}")
-    
-    def submit_output_data(self, airline: str, url_path: str, 
-                          data: bytes,
-                          extra_headers: Optional[Dict[str, str]] = None) -> bool:
-        """
-        向Live Server提交输出数据
-        
-        Args:
-            airline: 航司二字码
-            url_path: 输出URL路径（如：/api/orengine/po/solution）
-            data: 输出数据（gzip压缩的字节）
-            extra_headers: 额外的请求头
-            
-        Returns:
-            是否提交成功
-        """
-        url = self._build_url(airline, url_path)
-        
-        # 设置请求头
-        headers = {
-            'Content-Type': 'application/octet-stream',
-            'Flag': 'Rule'
-        }
-        if extra_headers:
-            headers.update(extra_headers)
-        
-        try:
-            response = self.session.post(
-                url,
-                data=data,
-                headers=headers,
-                timeout=self.timeout
-            )
-            response.raise_for_status()
-            
-            return True
-            
-        except requests.exceptions.RequestException as e:
-            raise Exception(f"提交输出数据失败: {str(e)}")
+        """从 Live Server 获取输入数据（gzip 压缩字节）"""
+        response = self._post(
+            airline,
+            url_path,
+            body=data,
+            content_type='application/json',
+            extra_headers=extra_headers,
+            error_prefix="获取输入数据失败",
+        )
+        return response.content
+
+    def submit_output_data(self, airline: str, url_path: str,
+                           data: bytes,
+                           extra_headers: Optional[Dict[str, str]] = None) -> bool:
+        """向 Live Server 提交输出数据（gzip 压缩字节）"""
+        self._post(
+            airline,
+            url_path,
+            body=data,
+            content_type='application/octet-stream',
+            extra_headers=extra_headers,
+            error_prefix="提交输出数据失败",
+        )
+        return True
     
     def close(self):
         """关闭HTTP会话"""

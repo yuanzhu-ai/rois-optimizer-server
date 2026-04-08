@@ -71,6 +71,58 @@ class Task:
         }
         redis_manager.set_task(self.task_id, task_data)
 
+    def _server_integration_enabled(self, optimizer_config) -> bool:
+        """判断优化器是否启用 Live Server 集成"""
+        return bool(getattr(optimizer_config, 'server_integration', False))
+
+    def _get_rule_category(self) -> str:
+        """Rule 专用：获取并校验 category 参数，缺失时抛 ValueError"""
+        category = self.parameters.get("category")
+        if not category:
+            raise ValueError("Rule类型缺少category参数")
+        return category
+
+    def _resolve_url_path(self, optimizer_config, direction: str) -> str:
+        """按优化器类型解析 input/output URL 路径
+
+        Rule 走 optimizer_config.categories[category].url.<direction>；
+        PO/RO/TO 走 optimizer_config.url.<direction>。
+
+        Args:
+            direction: 'input' 或 'output'
+        """
+        if self.optimizer_type == "Rule":
+            category = self._get_rule_category()
+            if category not in optimizer_config.categories:
+                raise ValueError(f"Rule category '{category}' 不存在")
+            url_cfg = optimizer_config.categories[category].url
+        else:
+            url_cfg = optimizer_config.url
+        return getattr(url_cfg, direction)
+
+    def _build_input_request_body(self):
+        """按优化器类型构造 Live Server input 请求体
+
+        - Rule: 通过 RuleRequestBuilder 构造 dict（_post 会以 json= 发送）
+        - PO/RO/TO: 发送纯整数 scenarioId（_post 会以 str(int) 作为原始 body）
+        """
+        if self.optimizer_type == "Rule":
+            return RuleRequestBuilder.build_request(self._get_rule_category(), self.parameters)
+
+        scenario_id = self.parameters.get("scenarioId")
+        if not scenario_id:
+            return None
+        try:
+            return int(scenario_id)
+        except (ValueError, TypeError):
+            return scenario_id
+
+    def _resolve_live_server_auth(self) -> (str, str):
+        """解析调用 Live Server 时使用的 base_url 和 token，未传时回退到默认值"""
+        base_url = self.url if self.url else f"http://localhost/{self.airline.lower()}"
+        token = self.token if self.token else ""
+        return base_url, token
+
     def _fetch_input_data(self) -> bool:
         """从Live Server获取input.gz文件
 
@@ -83,50 +135,28 @@ class Task:
         """
         optimizer_config = config_manager.get_optimizer_config(self.airline, self.optimizer_type)
 
-        if not hasattr(optimizer_config, 'server_integration') or not optimizer_config.server_integration:
+        if not self._server_integration_enabled(optimizer_config):
             logger.info("[Task %s] server_integration未启用，跳过获取input.gz", self.task_id)
             return False
 
-        # 获取输入URL路径
-        if self.optimizer_type == "Rule":
-            category = self.parameters.get("category")
-            if not category:
-                raise InputFetchError(f"[Task {self.task_id}] Rule类型缺少category参数")
-            if category not in optimizer_config.categories:
-                raise InputFetchError(f"[Task {self.task_id}] Rule category '{category}' 不存在")
-            category_config = optimizer_config.categories[category]
-            input_url = category_config.url.input
-        else:
-            input_url = optimizer_config.url.input
+        try:
+            input_url = self._resolve_url_path(optimizer_config, "input")
+            request_data = self._build_input_request_body()
+        except ValueError as e:
+            raise InputFetchError(f"[Task {self.task_id}] {e}") from e
 
-        base_url = self.url if self.url else f"http://localhost/{self.airline.lower()}"
-        token = self.token if self.token else ""
+        base_url, token = self._resolve_live_server_auth()
 
         logger.info("[Task %s] 正在从Live Server获取input.gz, URL: %s, API: %s",
-                     self.task_id, base_url, input_url)
+                    self.task_id, base_url, input_url)
+        logger.debug("[Task %s] 请求数据: %s", self.task_id, request_data)
 
         try:
             with create_live_server_client(base_url, token) as client:
-                # 准备请求数据
-                if self.optimizer_type == "Rule":
-                    category = self.parameters.get("category")
-                    request_data = RuleRequestBuilder.build_request(category, self.parameters)
-                else:
-                    scenario_id = self.parameters.get("scenarioId")
-                    if scenario_id:
-                        try:
-                            request_data = int(scenario_id)
-                        except (ValueError, TypeError):
-                            request_data = scenario_id
-                    else:
-                        request_data = None
-
-                logger.debug("[Task %s] 请求数据: %s", self.task_id, request_data)
-
                 response_data = client.get_input_data(
                     airline=self.airline,
                     url_path=input_url,
-                    data=request_data
+                    data=request_data,
                 )
         except Exception as e:
             raise InputFetchError(f"[Task {self.task_id}] 获取input.gz失败: {e}") from e
@@ -136,8 +166,7 @@ class Task:
         with open(self.input_file_path, 'wb') as f:
             f.write(response_data)
 
-        file_size = len(response_data)
-        logger.info("[Task %s] 成功获取input.gz，大小: %d bytes", self.task_id, file_size)
+        logger.info("[Task %s] 成功获取input.gz，大小: %d bytes", self.task_id, len(response_data))
         return True
 
     def _submit_output_data(self) -> bool:
@@ -152,28 +181,23 @@ class Task:
         """
         optimizer_config = config_manager.get_optimizer_config(self.airline, self.optimizer_type)
 
-        if not hasattr(optimizer_config, 'server_integration') or not optimizer_config.server_integration:
+        if not self._server_integration_enabled(optimizer_config):
             logger.info("[Task %s] server_integration未启用，跳过提交output.gz", self.task_id)
             return False
 
-        # 查找输出文件
         self.output_file_path = os.path.join(self.working_dir, "output.gz")
         if not os.path.exists(self.output_file_path):
             raise OutputSubmitError(f"[Task {self.task_id}] 输出文件不存在: {self.output_file_path}")
 
-        # 获取输出URL路径
-        if self.optimizer_type == "Rule":
-            category = self.parameters.get("category")
-            category_config = optimizer_config.categories[category]
-            output_url = category_config.url.output
-        else:
-            output_url = optimizer_config.url.output
+        try:
+            output_url = self._resolve_url_path(optimizer_config, "output")
+        except ValueError as e:
+            raise OutputSubmitError(f"[Task {self.task_id}] {e}") from e
 
-        base_url = self.url if self.url else f"http://localhost/{self.airline.lower()}"
-        token = self.token if self.token else ""
+        base_url, token = self._resolve_live_server_auth()
 
         logger.info("[Task %s] 正在向Live Server提交output.gz, URL: %s, API: %s",
-                     self.task_id, base_url, output_url)
+                    self.task_id, base_url, output_url)
 
         try:
             with open(self.output_file_path, 'rb') as f:
@@ -183,13 +207,12 @@ class Task:
                 client.submit_output_data(
                     airline=self.airline,
                     url_path=output_url,
-                    data=output_data
+                    data=output_data,
                 )
         except Exception as e:
             raise OutputSubmitError(f"[Task {self.task_id}] 提交output.gz失败: {e}") from e
 
-        file_size = len(output_data)
-        logger.info("[Task %s] 成功提交output.gz，大小: %d bytes", self.task_id, file_size)
+        logger.info("[Task %s] 成功提交output.gz，大小: %d bytes", self.task_id, len(output_data))
         return True
 
     def _build_command(self, optimizer) -> List[str]:
@@ -362,6 +385,8 @@ class Task:
                 self.status = TaskStatus.STOPPED
                 self.end_time = time.time()
                 self._save_to_redis()
+                # 搬运被停止的任务目录到 finished/<airline>/<task_dir>_stop/
+                file_manager.move_to_finished(self.working_dir, self.airline, suffix="_stop")
                 logger.info("[Task %s] 任务已停止", self.task_id)
                 return True
             except Exception as e:
@@ -405,7 +430,7 @@ class Task:
                     # 因为优化结果文件已经在本地生成
 
                 # 移动结果文件到finished目录
-                file_manager.move_to_finished(self.working_dir)
+                file_manager.move_to_finished(self.working_dir, self.airline)
 
                 self.status = TaskStatus.COMPLETED
                 logger.info("[Task %s] 任务执行完成", self.task_id)
@@ -415,6 +440,8 @@ class Task:
                 self.error_message = stderr_text or f"进程退出码: {self.process.returncode}"
                 logger.error("[Task %s] 任务执行失败, returncode=%d, stderr=%s",
                              self.task_id, self.process.returncode, stderr_text[:500])
+                # 搬运失败任务目录到 finished/<airline>/<task_dir>_failed/
+                file_manager.move_to_finished(self.working_dir, self.airline, suffix="_failed")
             self.end_time = time.time()
             self._save_to_redis()
 

@@ -45,90 +45,132 @@ class TestMoveToFinished:
     """move_to_finished 测试"""
 
     def test_move_single_file(self, file_mgr, temp_workspace):
-        """移动单个文件到 finished"""
-        # 创建源目录和文件
+        """移动任务目录到 finished/<airline>/，保留目录结构"""
         src_dir = os.path.join(temp_workspace['workspace'], "BR", "PO_test")
         os.makedirs(src_dir, exist_ok=True)
         test_file = os.path.join(src_dir, "output.gz")
         with open(test_file, 'w') as f:
             f.write("test content")
 
-        result = file_mgr.move_to_finished(src_dir)
+        result = file_mgr.move_to_finished(src_dir, "BR")
         assert result is True
 
-        # 验证文件已移动
-        finished_file = os.path.join(temp_workspace['finished'], "output.gz")
-        assert os.path.exists(finished_file)
+        # 任务目录应整体搬运至 finished/BR/PO_test/
+        finished_task_dir = os.path.join(temp_workspace['finished'], "BR", "PO_test")
+        assert os.path.isdir(finished_task_dir)
+        assert os.path.exists(os.path.join(finished_task_dir, "output.gz"))
 
-        # 验证源目录被删除
+        # 源目录被删除
         assert not os.path.exists(src_dir)
 
-    def test_move_multiple_files(self, file_mgr, temp_workspace):
-        """移动多个文件"""
-        src_dir = os.path.join(temp_workspace['workspace'], "test_multi")
-        os.makedirs(src_dir, exist_ok=True)
+    def test_move_preserves_subdirectories(self, file_mgr, temp_workspace):
+        """任务目录内的子目录也应整体搬运"""
+        src_dir = os.path.join(temp_workspace['workspace'], "F8", "RO_20260408")
+        sub_dir = os.path.join(src_dir, "details", "segments")
+        os.makedirs(sub_dir, exist_ok=True)
 
-        for name in ["input.gz", "output.gz", "log.txt"]:
-            with open(os.path.join(src_dir, name), 'w') as f:
-                f.write(f"content of {name}")
+        with open(os.path.join(src_dir, "output.gz"), 'w') as f:
+            f.write("root")
+        with open(os.path.join(sub_dir, "seg.json"), 'w') as f:
+            f.write("nested")
 
-        result = file_mgr.move_to_finished(src_dir)
+        result = file_mgr.move_to_finished(src_dir, "F8")
         assert result is True
 
-        finished_files = os.listdir(temp_workspace['finished'])
-        assert len(finished_files) == 3
+        finished_task_dir = os.path.join(temp_workspace['finished'], "F8", "RO_20260408")
+        assert os.path.isdir(finished_task_dir)
+        assert os.path.exists(os.path.join(finished_task_dir, "output.gz"))
+        assert os.path.exists(os.path.join(finished_task_dir, "details", "segments", "seg.json"))
+
+    def test_move_airline_isolation(self, file_mgr, temp_workspace):
+        """不同航司的同名任务目录应隔离存放"""
+        for airline in ("BR", "F8"):
+            src_dir = os.path.join(temp_workspace['workspace'], airline, "PO_task")
+            os.makedirs(src_dir, exist_ok=True)
+            with open(os.path.join(src_dir, "output.gz"), 'w') as f:
+                f.write(f"{airline} content")
+            assert file_mgr.move_to_finished(src_dir, airline) is True
+
+        assert os.path.isdir(os.path.join(temp_workspace['finished'], "BR", "PO_task"))
+        assert os.path.isdir(os.path.join(temp_workspace['finished'], "F8", "PO_task"))
 
     def test_move_with_name_conflict(self, file_mgr, temp_workspace):
-        """目标文件名冲突时应添加时间戳"""
-        # 先在 finished 中创建同名文件
-        existing = os.path.join(temp_workspace['finished'], "output.gz")
-        with open(existing, 'w') as f:
+        """目标目录名冲突时应追加时间戳后缀"""
+        # 先在 finished/BR 中创建同名任务目录
+        existing_dir = os.path.join(temp_workspace['finished'], "BR", "PO_task")
+        os.makedirs(existing_dir, exist_ok=True)
+        with open(os.path.join(existing_dir, "output.gz"), 'w') as f:
             f.write("existing")
 
-        # 移动同名文件
-        src_dir = os.path.join(temp_workspace['workspace'], "test_conflict")
+        # 准备同名源目录
+        src_dir = os.path.join(temp_workspace['workspace'], "BR", "PO_task")
         os.makedirs(src_dir, exist_ok=True)
         with open(os.path.join(src_dir, "output.gz"), 'w') as f:
             f.write("new content")
 
-        result = file_mgr.move_to_finished(src_dir)
+        result = file_mgr.move_to_finished(src_dir, "BR")
         assert result is True
 
-        # 应该有两个文件（原始 + 带时间戳的）
-        finished_files = os.listdir(temp_workspace['finished'])
-        assert len(finished_files) == 2
-        assert "output.gz" in finished_files
-        # 带时间戳的文件名
-        other = [f for f in finished_files if f != "output.gz"]
-        assert len(other) == 1
-        assert other[0].startswith("output_")
+        airline_finished = os.path.join(temp_workspace['finished'], "BR")
+        entries = os.listdir(airline_finished)
+        assert "PO_task" in entries
+        assert len(entries) == 2
+        other = [e for e in entries if e != "PO_task"]
+        assert other[0].startswith("PO_task_")
 
 
 class TestArchiveFiles:
     """archive_files 测试"""
 
     def test_archive_files(self, file_mgr, temp_workspace):
-        """归档 finished 目录中的文件"""
-        # 在 finished 中创建文件
+        """按航司归档 finished 中的任务目录"""
+        # 构造 finished/BR/PO_task/{result1.txt,result2.txt}
+        task_dir = os.path.join(temp_workspace['finished'], "BR", "PO_task")
+        os.makedirs(task_dir, exist_ok=True)
         for name in ["result1.txt", "result2.txt"]:
-            with open(os.path.join(temp_workspace['finished'], name), 'w') as f:
+            with open(os.path.join(task_dir, name), 'w') as f:
                 f.write(f"content of {name}")
 
         result = file_mgr.archive_files()
         assert result is True
 
-        # finished 应该为空
-        assert len(os.listdir(temp_workspace['finished'])) == 0
+        # finished/BR 清理完毕
+        assert not os.path.exists(task_dir)
 
-        # archive 中应有日期目录
-        archive_subdirs = os.listdir(temp_workspace['archive'])
-        assert len(archive_subdirs) == 1
+        # archive 下应出现航司隔离的日期目录
+        airline_archive = os.path.join(temp_workspace['archive'], "BR")
+        assert os.path.isdir(airline_archive)
+        date_dirs = os.listdir(airline_archive)
+        assert len(date_dirs) == 1
 
-        # 日期目录中应有压缩文件
-        date_dir = os.path.join(temp_workspace['archive'], archive_subdirs[0])
-        archived_files = os.listdir(date_dir)
-        assert len(archived_files) == 2
-        assert all(f.endswith('.gz') for f in archived_files)
+        # 任务目录应打包为 tar.gz
+        archived = os.listdir(os.path.join(airline_archive, date_dirs[0]))
+        assert archived == ["PO_task.tar.gz"]
+
+    def test_archive_airline_isolation(self, file_mgr, temp_workspace):
+        """多航司任务归档时 archive 目录按航司隔离"""
+        import tarfile
+        for airline in ("BR", "F8"):
+            task_dir = os.path.join(temp_workspace['finished'], airline, f"{airline}_task")
+            os.makedirs(task_dir, exist_ok=True)
+            with open(os.path.join(task_dir, "output.gz"), 'w') as f:
+                f.write(airline)
+
+        file_mgr.archive_files()
+
+        for airline in ("BR", "F8"):
+            airline_archive = os.path.join(temp_workspace['archive'], airline)
+            assert os.path.isdir(airline_archive)
+            date_dirs = os.listdir(airline_archive)
+            assert len(date_dirs) == 1
+            tarball = os.path.join(
+                airline_archive, date_dirs[0], f"{airline}_task.tar.gz"
+            )
+            assert os.path.isfile(tarball)
+            # tar.gz 中应保留任务目录结构
+            with tarfile.open(tarball, "r:gz") as tar:
+                names = tar.getnames()
+            assert f"{airline}_task/output.gz" in names
 
     def test_archive_empty_finished(self, file_mgr, temp_workspace):
         """finished 为空时归档应成功且无操作"""
@@ -136,21 +178,23 @@ class TestArchiveFiles:
         assert result is True
 
     def test_archived_files_are_gzip(self, file_mgr, temp_workspace):
-        """验证归档文件确实是 gzip 压缩的"""
+        """验证归档 tar.gz 内的文件解压后内容一致"""
+        import tarfile
         original_content = "This is the original content 中文测试"
-        with open(os.path.join(temp_workspace['finished'], "test.txt"), 'w') as f:
+        task_dir = os.path.join(temp_workspace['finished'], "BR", "task_a")
+        os.makedirs(task_dir, exist_ok=True)
+        with open(os.path.join(task_dir, "test.txt"), 'w') as f:
             f.write(original_content)
 
         file_mgr.archive_files()
 
-        # 找到归档文件
-        archive_subdirs = os.listdir(temp_workspace['archive'])
-        date_dir = os.path.join(temp_workspace['archive'], archive_subdirs[0])
-        archived_file = os.path.join(date_dir, os.listdir(date_dir)[0])
-
-        # 解压验证
-        with gzip.open(archived_file, 'rb') as f:
-            decompressed = f.read().decode('utf-8')
+        date_dirs = os.listdir(os.path.join(temp_workspace['archive'], "BR"))
+        tarball = os.path.join(
+            temp_workspace['archive'], "BR", date_dirs[0], "task_a.tar.gz"
+        )
+        with tarfile.open(tarball, "r:gz") as tar:
+            member = tar.extractfile("task_a/test.txt")
+            decompressed = member.read().decode('utf-8')
         assert decompressed == original_content
 
 

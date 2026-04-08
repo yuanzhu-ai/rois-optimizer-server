@@ -1,6 +1,7 @@
 import os
 import shutil
 import gzip
+import tarfile
 import time
 import uuid
 import logging
@@ -19,43 +20,43 @@ class FileManager:
         self.file_management = config.file_management
         self._lock = threading.Lock()
 
-    def move_to_finished(self, source_dir: str) -> bool:
-        """将优化完成的文件移动至finished文件夹"""
+    def move_to_finished(self, source_dir: str, airline: str, suffix: str = "") -> bool:
+        """将任务目录整体移动至 finished/<airline>/ 下，保留子目录结构
+
+        Args:
+            source_dir: 源任务工作目录
+            airline: 航司代码（作为 finished 子目录名）
+            suffix: 可选后缀，追加到目标目录基础名上（例如 "_failed"、"_stop"）
+        """
         with self._lock:
             try:
-                os.makedirs(self.paths.finished_dir, exist_ok=True)
-                files = os.listdir(source_dir)
+                if not os.path.isdir(source_dir):
+                    logger.warning("源目录不存在: %s", source_dir)
+                    return False
 
-                for file in files:
-                    src_path = os.path.join(source_dir, file)
-                    if not os.path.isfile(src_path):
-                        continue
-                    dst_path = os.path.join(self.paths.finished_dir, file)
+                airline_finished_dir = os.path.join(self.paths.finished_dir, airline)
+                os.makedirs(airline_finished_dir, exist_ok=True)
 
-                    # 使用 UUID 后缀避免命名冲突（比时间戳更安全）
-                    if os.path.exists(dst_path):
-                        name, ext = os.path.splitext(file)
-                        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-                        short_id = uuid.uuid4().hex[:6]
-                        new_filename = f"{name}_{timestamp}_{short_id}{ext}"
-                        dst_path = os.path.join(self.paths.finished_dir, new_filename)
+                base_name = os.path.basename(os.path.normpath(source_dir)) + (suffix or "")
+                dst_dir = os.path.join(airline_finished_dir, base_name)
 
-                    shutil.move(src_path, dst_path)
+                # 同名冲突时追加时间戳 + 短 UUID
+                if os.path.exists(dst_dir):
+                    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+                    short_id = uuid.uuid4().hex[:6]
+                    dst_dir = os.path.join(
+                        airline_finished_dir, f"{base_name}_{timestamp}_{short_id}"
+                    )
 
-                # 安全删除空目录
-                try:
-                    if os.path.isdir(source_dir) and not os.listdir(source_dir):
-                        shutil.rmtree(source_dir, ignore_errors=True)
-                except OSError:
-                    pass
-
+                shutil.move(source_dir, dst_dir)
+                logger.info("任务目录已移动至 finished: %s", dst_dir)
                 return True
             except Exception as e:
-                logger.error("移动文件失败: %s", e, exc_info=True)
+                logger.error("移动任务目录失败: %s", e, exc_info=True)
                 return False
 
     def archive_files(self) -> bool:
-        """将Finished文件夹中的文件移动至archive文件夹并压缩"""
+        """将 finished 目录中的任务按航司归档至 archive/<airline>/<date>/ 下"""
         with self._lock:
             try:
                 os.makedirs(self.paths.archive_dir, exist_ok=True)
@@ -63,27 +64,65 @@ class FileManager:
                 if not os.path.exists(self.paths.finished_dir):
                     return True
 
-                files = os.listdir(self.paths.finished_dir)
-                if not files:
-                    return True
-
                 archive_date = datetime.datetime.now().strftime("%Y%m%d")
-                archive_subdir = os.path.join(self.paths.archive_dir, archive_date)
-                os.makedirs(archive_subdir, exist_ok=True)
+                total_archived = 0
 
-                for file in files:
-                    src_path = os.path.join(self.paths.finished_dir, file)
-                    if not os.path.isfile(src_path):
+                for airline_name in os.listdir(self.paths.finished_dir):
+                    airline_src = os.path.join(self.paths.finished_dir, airline_name)
+                    if not os.path.isdir(airline_src):
+                        # 兼容遗留的顶层散文件（无航司归属），落入 _legacy
+                        if os.path.isfile(airline_src):
+                            legacy_subdir = os.path.join(
+                                self.paths.archive_dir, "_legacy", archive_date
+                            )
+                            os.makedirs(legacy_subdir, exist_ok=True)
+                            dst = os.path.join(legacy_subdir, f"{airline_name}.gz")
+                            with open(airline_src, 'rb') as f_in, gzip.open(dst, 'wb') as f_out:
+                                shutil.copyfileobj(f_in, f_out)
+                            os.remove(airline_src)
+                            total_archived += 1
                         continue
-                    dst_path = os.path.join(archive_subdir, f"{file}.gz")
 
-                    with open(src_path, 'rb') as f_in:
-                        with gzip.open(dst_path, 'wb') as f_out:
-                            shutil.copyfileobj(f_in, f_out)
+                    entries = os.listdir(airline_src)
+                    if not entries:
+                        continue
 
-                    os.remove(src_path)
+                    archive_subdir = os.path.join(
+                        self.paths.archive_dir, airline_name, archive_date
+                    )
+                    os.makedirs(archive_subdir, exist_ok=True)
 
-                logger.info("归档完成，处理 %d 个文件", len(files))
+                    for entry in entries:
+                        entry_path = os.path.join(airline_src, entry)
+                        if os.path.isdir(entry_path):
+                            # 整个任务目录打包为 tar.gz，保留子目录结构
+                            dst = os.path.join(archive_subdir, f"{entry}.tar.gz")
+                            if os.path.exists(dst):
+                                short_id = uuid.uuid4().hex[:6]
+                                dst = os.path.join(
+                                    archive_subdir, f"{entry}_{short_id}.tar.gz"
+                                )
+                            with tarfile.open(dst, "w:gz") as tar:
+                                tar.add(entry_path, arcname=entry)
+                            shutil.rmtree(entry_path, ignore_errors=True)
+                            total_archived += 1
+                        elif os.path.isfile(entry_path):
+                            # 散文件单独 gzip
+                            dst = os.path.join(archive_subdir, f"{entry}.gz")
+                            with open(entry_path, 'rb') as f_in, gzip.open(dst, 'wb') as f_out:
+                                shutil.copyfileobj(f_in, f_out)
+                            os.remove(entry_path)
+                            total_archived += 1
+
+                    # 清理空的航司 finished 子目录
+                    try:
+                        if not os.listdir(airline_src):
+                            os.rmdir(airline_src)
+                    except OSError:
+                        pass
+
+                if total_archived > 0:
+                    logger.info("归档完成，处理 %d 个条目", total_archived)
                 return True
             except Exception as e:
                 logger.error("归档文件失败: %s", e, exc_info=True)
