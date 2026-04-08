@@ -421,19 +421,25 @@ class Task:
                 self.progress = 100
                 redis_manager.update_task_progress(self.task_id, 100)
 
-                # 提交输出文件到Live Server
+                # 提交输出文件到Live Server，提交失败视为任务失败
+                submit_failed = False
                 try:
                     self._submit_output_data()
                 except OutputSubmitError as e:
                     logger.error("[Task %s] %s", self.task_id, e)
-                    # 输出提交失败不影响任务状态标记为完成
-                    # 因为优化结果文件已经在本地生成
+                    submit_failed = True
+                    self.status = TaskStatus.FAILED
+                    self.error_message = str(e)
 
-                # 移动结果文件到finished目录
-                file_manager.move_to_finished(self.working_dir, self.airline)
-
-                self.status = TaskStatus.COMPLETED
-                logger.info("[Task %s] 任务执行完成", self.task_id)
+                if submit_failed:
+                    # 提交失败：归档到 finished/<airline>/<task_dir>_submit_failed/
+                    file_manager.move_to_finished(self.working_dir, self.airline, suffix="_submit_failed")
+                    logger.error("[Task %s] 任务因output.gz提交失败而失败", self.task_id)
+                else:
+                    # 移动结果文件到finished目录
+                    file_manager.move_to_finished(self.working_dir, self.airline)
+                    self.status = TaskStatus.COMPLETED
+                    logger.info("[Task %s] 任务执行完成", self.task_id)
             else:
                 stderr_text = "\n".join(self._stderr_lines)
                 self.status = TaskStatus.FAILED

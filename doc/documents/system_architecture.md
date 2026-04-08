@@ -88,9 +88,11 @@ optimize-server/
 - **功能**：管理优化过程中产生的文件，包括移动、归档和清理
 - **核心类**：`FileManager`
 - **任务目录搬运**：`move_to_finished` 将整个任务工作目录（保留子目录结构）搬运至
-  `finished/<airline>/<task_dir>`，支持 `suffix` 参数（如 `_failed`、`_stop`）
+  `finished/<airline>/<task_dir>`，支持 `suffix` 参数（如 `_failed`、`_stop`、`_submit_failed`）
 - **航司隔离归档**：`archive_files` 按 `archive/<airline>/<date>/` 组织归档；任务子目录
   打包为 `<task>.tar.gz` 保留内部结构，散文件单独 gzip
+- **跨日归档**：仅归档 mtime 早于今天的条目（当天产物保留在 finished，留待次日处理），
+  归档子目录使用条目自身日期，避免昨天的产物落入今天的目录
 - **冲突处理**：目标命名冲突时追加时间戳 + 短 UUID，避免覆盖
 - **遗留兼容**：`finished/` 顶层散文件落入 `archive/_legacy/<date>/` 不丢失
 

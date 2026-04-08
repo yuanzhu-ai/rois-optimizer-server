@@ -64,16 +64,24 @@ class FileManager:
                 if not os.path.exists(self.paths.finished_dir):
                     return True
 
-                archive_date = datetime.datetime.now().strftime("%Y%m%d")
+                today = datetime.date.today()
                 total_archived = 0
+
+                def entry_date(path: str) -> datetime.date:
+                    """以 mtime 作为条目所属日期"""
+                    return datetime.date.fromtimestamp(os.path.getmtime(path))
 
                 for airline_name in os.listdir(self.paths.finished_dir):
                     airline_src = os.path.join(self.paths.finished_dir, airline_name)
                     if not os.path.isdir(airline_src):
                         # 兼容遗留的顶层散文件（无航司归属），落入 _legacy
                         if os.path.isfile(airline_src):
+                            file_date = entry_date(airline_src)
+                            if file_date >= today:
+                                continue
+                            date_str = file_date.strftime("%Y%m%d")
                             legacy_subdir = os.path.join(
-                                self.paths.archive_dir, "_legacy", archive_date
+                                self.paths.archive_dir, "_legacy", date_str
                             )
                             os.makedirs(legacy_subdir, exist_ok=True)
                             dst = os.path.join(legacy_subdir, f"{airline_name}.gz")
@@ -87,13 +95,22 @@ class FileManager:
                     if not entries:
                         continue
 
-                    archive_subdir = os.path.join(
-                        self.paths.archive_dir, airline_name, archive_date
-                    )
-                    os.makedirs(archive_subdir, exist_ok=True)
-
                     for entry in entries:
                         entry_path = os.path.join(airline_src, entry)
+                        try:
+                            edate = entry_date(entry_path)
+                        except OSError:
+                            continue
+                        # 当天的条目跳过，留到次日再归档
+                        if edate >= today:
+                            continue
+
+                        date_str = edate.strftime("%Y%m%d")
+                        archive_subdir = os.path.join(
+                            self.paths.archive_dir, airline_name, date_str
+                        )
+                        os.makedirs(archive_subdir, exist_ok=True)
+
                         if os.path.isdir(entry_path):
                             # 整个任务目录打包为 tar.gz，保留子目录结构
                             dst = os.path.join(archive_subdir, f"{entry}.tar.gz")
